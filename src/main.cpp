@@ -16,7 +16,15 @@ void print_usage() {
               << "  --induced                Perform an induced subgraph isomorphism search\n"
               << "  --use-full-graph         Use the full data graph for orbit filtering instead of a subgraph\n"
               << "  --cbj                    Use conflict-directed backjumping during enumeration\n"
-              << "  --verbose                Print all found matches to the console\n";
+              << "  --filter-only            Run filtering only; skip ordering and search\n"
+              << "  --verbose                Print all found matches to the console\n"
+              << "  --orbit-throttle         Skip the per-iteration orbit recount once candidates\n"
+              << "                           have nearly stabilized (opt-in; changes what \"iteration\n"
+              << "                           N\" costs, not what it converges to -- see CLAUDE.md)\n"
+              << "  --orbit-throttle-threshold <f>  Min candidate-shrink fraction to keep running the\n"
+              << "                                  orbit recount every iteration (default: 0.05)\n"
+              << "  --disable-semi-join      Skip the edge-consistency (semi-join) filter stage\n"
+              << "                           (enabled by default)\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -34,6 +42,10 @@ int main(int argc, char* argv[]) {
     bool use_full_graph = false;
     bool cbj_search = false;
     bool verbose = false;
+    bool filter_only = false;
+    bool orbit_throttle = false;
+    double orbit_throttle_threshold = 0.05;
+    bool enable_semi_join = true;
 
     bool iterate_specified = false;
 
@@ -66,8 +78,22 @@ int main(int argc, char* argv[]) {
             use_full_graph = true;
         } else if (args[i] == "--cbj") {
             cbj_search = true;
+        } else if (args[i] == "--filter-only") {
+            filter_only = true;
         } else if (args[i] == "--verbose") {
             verbose = true;
+        } else if (args[i] == "--orbit-throttle") {
+            orbit_throttle = true;
+        } else if (args[i] == "--orbit-throttle-threshold" && i + 1 < args.size()) {
+            try {
+                orbit_throttle_threshold = std::stod(args[++i]);
+            } catch(...) {
+                std::cerr << "Invalid --orbit-throttle-threshold value.\n";
+                print_usage();
+                return 1;
+            }
+        } else if (args[i] == "--disable-semi-join") {
+            enable_semi_join = false;
         }
     }
 
@@ -102,10 +128,19 @@ int main(int argc, char* argv[]) {
     std::cout << "Graphlet size: " << graphlet_size << std::endl;
     std::cout << "Filter mode: " << (use_full_graph ? "Full Graph" : "Subgraph") << std::endl;
     std::cout << "Max iterations: " << (iterations == 0 ? "Until Convergence (0)" : std::to_string(iterations)) << std::endl;
+    if (orbit_throttle) {
+        std::cout << "Orbit recount throttle: Enabled (threshold " << orbit_throttle_threshold << ")" << std::endl;
+    }
+    if (!enable_semi_join) {
+        std::cout << "Semi-Join filter: Disabled" << std::endl;
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    FilterEngine filter_engine(data_graph, pattern_graph, graphlet_size, use_full_graph, iterations);
+    bool print_filter_stats = filter_only || verbose;
+    FilterEngine filter_engine(data_graph, pattern_graph, graphlet_size, use_full_graph, iterations,
+                                print_filter_stats, orbit_throttle, orbit_throttle_threshold,
+                                enable_semi_join);
     if (!filter_engine.run()) {
         std::cout << "Matches found: 0" << std::endl;
         return 0;
@@ -114,6 +149,10 @@ int main(int argc, char* argv[]) {
     auto filter_end = std::chrono::high_resolution_clock::now();
     auto filter_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(filter_end - start);
     std::cout << "\nTotal filtering time: " << filter_elapsed.count() << " ms." << std::endl;
+
+    if (filter_only) {
+        return 0;
+    }
 
     auto order_start = std::chrono::high_resolution_clock::now();
     OrderEngine order_engine(pattern_graph, filter_engine.getPatternOrbits());
@@ -142,9 +181,9 @@ int main(int argc, char* argv[]) {
         for (const auto& match : matches) {
             std::cout << "{";
             bool first = true;
-            for (const auto& pair : match) {
+            for (size_t u = 0; u < match.size(); ++u) {
                 if (!first) std::cout << ", ";
-                std::cout << pair.first << ": " << pair.second;
+                std::cout << u << ": " << match[u];
                 first = false;
             }
             std::cout << "}" << std::endl;

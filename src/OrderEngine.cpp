@@ -12,7 +12,7 @@ void OrderEngine::run() {
     std::unordered_map<int, double> orbit_strength;
     for (int u : pattern_graph.original_node_ids) {
         double score = 0.0;
-        for (long long val : pattern_orbits.at(u)) {
+        for (long long val : pattern_orbits.at(pattern_graph.get_node_idx(u))) {
             score += static_cast<double>(val) * val;
         }
         orbit_strength[u] = score;

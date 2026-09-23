@@ -5,7 +5,7 @@
 #include <vector>
 #include <unordered_map>
 
-using OrbitCounts = std::unordered_map<int, std::vector<long long>>;
+using OrbitCounts = std::vector<std::vector<long long>>;
 
 class EVOKEOrbitCounter {
 public:

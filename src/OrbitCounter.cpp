@@ -53,14 +53,13 @@ OrbitCounts EVOKEOrbitCounter::count() {
         }
     }
     
-    OrbitCounts result;
+    OrbitCounts result(g_relabel.nVertices);
     for (VertexIdx i = 0; i < g_relabel.nVertices; ++i) {
-        std::vector<long long> counts;
+        std::vector<long long>& counts = result[i];
         counts.reserve(num_node_orbits);
         for (int orbit = 0; orbit < num_node_orbits; ++orbit) {
             counts.push_back(orbit_counts.per_vertex_[orbit][mapping[i]]);
         }
-        result[graph.original_node_ids[i]] = counts;
     }
 
     delete[] mapping;

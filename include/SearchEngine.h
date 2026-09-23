@@ -4,7 +4,7 @@
 #include "AppGraph.h"
 #include "FilterEngine.h"
 
-using Mapping = std::unordered_map<int, int>;
+using Mapping = std::vector<int>;
 
 class SearchEngine {
 public:
@@ -17,7 +17,8 @@ public:
 
 private:
     void backtrack(int depth);
-    bool is_valid(int u, int v);
+    bool is_valid(int u, int i, int v);
+    static bool bit_test(const std::vector<uint64_t>& bits, int pos);
 
     const AppGraph& data_graph;
     const AppGraph& pattern_graph;
@@ -27,12 +28,15 @@ private:
 
     std::vector<int> fast_mapping;
     std::vector<int> fast_inverse_mapping;
-    
+    std::vector<int> fast_mapping_local_index;
+
     std::vector<std::vector<int>> pattern_neighbors;
     std::vector<std::vector<int>> pattern_non_neighbors;
 
-    std::vector<std::vector<uint64_t>> bit_candidates;
-    int num_words = 0;
+    std::vector<std::vector<int>> candidate_lists;
+    std::vector<std::vector<std::vector<std::vector<uint64_t>>>> candidate_adj;
+    std::vector<int> pivot_slot;
+
     std::vector<int> order_position;
     std::vector<std::vector<int>> conflict_set;
     bool enable_cbj;
@@ -41,7 +45,7 @@ private:
     std::vector<int> symmetry_parent;
 
     int backtrack_cbj(int depth);
-    bool is_valid_cbj(int u, int v, int depth, int& conflict_u);
+    bool is_valid_cbj(int u, int i, int v, int depth, int& conflict_u);
 
     std::vector<Mapping> matches;
 };

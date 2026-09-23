@@ -14,6 +14,7 @@ public:
     std::unordered_map<int, int> node_to_idx;
     std::unordered_map<int, int> labels;
     std::vector<int> fast_node_to_idx;
+    std::vector<int> fast_labels;
 
     AppGraph() = default;
     ~AppGraph();
@@ -23,6 +24,13 @@ public:
     inline int get_node_idx(int node_id) const {
         if (node_id >= 0 && static_cast<size_t>(node_id) < fast_node_to_idx.size()) {
             return fast_node_to_idx[node_id];
+        }
+        return -1;
+    }
+
+    inline int get_label_fast(int node_id) const {
+        if (node_id >= 0 && static_cast<size_t>(node_id) < fast_labels.size()) {
+            return fast_labels[node_id];
         }
         return -1;
     }

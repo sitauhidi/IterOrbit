@@ -34,6 +34,7 @@ void AppGraph::copy_from(const AppGraph& other) {
     this->original_node_ids = other.original_node_ids;
     this->node_to_idx = other.node_to_idx;
     this->fast_node_to_idx = other.fast_node_to_idx;
+    this->fast_labels = other.fast_labels;
     
     if (other.c_graph) {
         this->c_graph = new Escape::CGraph();
@@ -78,10 +79,12 @@ bool AppGraph::readFromFile(const std::string& filepath) {
 
     int max_id = original_node_ids.empty() ? -1 : original_node_ids.back();
     fast_node_to_idx.assign(max_id + 1, -1);
+    fast_labels.assign(max_id + 1, -1);
 
     for (size_t i = 0; i < original_node_ids.size(); ++i) {
         node_to_idx[original_node_ids[i]] = i;
         fast_node_to_idx[original_node_ids[i]] = i;
+        fast_labels[original_node_ids[i]] = labels.at(original_node_ids[i]);
     }
 
     std::vector<std::vector<int>> adj_temp(original_node_ids.size());
@@ -146,8 +149,9 @@ AppGraph AppGraph::createSubgraph(const AppGraph& original, const std::unordered
     AppGraph subgraph;
     
     for (int node_id : node_subset) {
-        if (original.labels.count(node_id)) {
-            subgraph.labels[node_id] = original.labels.at(node_id);
+        int lbl = original.get_label_fast(node_id);
+        if (lbl != -1) {
+            subgraph.labels[node_id] = lbl;
             subgraph.original_node_ids.push_back(node_id);
         }
     }
@@ -155,10 +159,13 @@ AppGraph AppGraph::createSubgraph(const AppGraph& original, const std::unordered
 
     int max_id = subgraph.original_node_ids.empty() ? -1 : subgraph.original_node_ids.back();
     subgraph.fast_node_to_idx.assign(max_id + 1, -1);
+    subgraph.fast_labels.assign(max_id + 1, -1);
 
     for (size_t i = 0; i < subgraph.original_node_ids.size(); ++i) {
-        subgraph.node_to_idx[subgraph.original_node_ids[i]] = i;
-        subgraph.fast_node_to_idx[subgraph.original_node_ids[i]] = i;
+        int node_id = subgraph.original_node_ids[i];
+        subgraph.node_to_idx[node_id] = i;
+        subgraph.fast_node_to_idx[node_id] = i;
+        subgraph.fast_labels[node_id] = subgraph.labels.at(node_id);
     }
 
     std::vector<std::vector<int>> adj_temp(subgraph.original_node_ids.size());

@@ -13,9 +13,11 @@ def execute_binary(binary_path, data_graph, query_graph):
     iterate_flag = f' --iterate {iterate_val}' if iterate_val is not None else ''
     use_full_graph = os.environ.get('USE_FULL_GRAPH', '0')
     full_graph_flag = ' --use-full-graph' if use_full_graph == '1' else ''
-    
+    cbj = os.environ.get('CBJ', '0')
+    cbj_flag = ' --cbj' if cbj == '1' else ''
+
     command = (f'{binary_path} --data {data_graph} --pattern {query_graph} '
-               f'--graphlet-size {graphlet_size}{iterate_flag}{full_graph_flag}')
+               f'--graphlet-size {graphlet_size}{iterate_flag}{full_graph_flag}{cbj_flag}')
                
     process = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
     std_output, std_error = process.communicate()
