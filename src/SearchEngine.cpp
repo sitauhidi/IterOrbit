@@ -1,43 +1,66 @@
 #include "SearchEngine.h"
+#include <algorithm>
 #include <unordered_map>
+
+namespace {
+
+size_t intersectSorted(const int* a, size_t na, const int* b, size_t nb, int* out) {
+    if (na > nb) {
+        std::swap(a, b);
+        std::swap(na, nb);
+    }
+    size_t count = 0;
+    if (na * 32 < nb) {
+        size_t lo = 0;
+        for (size_t i = 0; i < na && lo < nb; ++i) {
+            size_t step = 1, hi = lo;
+            while (hi < nb && b[hi] < a[i]) {
+                lo = hi;
+                hi += step;
+                step <<= 1;
+            }
+            lo = std::lower_bound(b + lo, b + std::min(hi + 1, nb), a[i]) - b;
+            if (lo < nb && b[lo] == a[i]) out[count++] = a[i];
+        }
+        return count;
+    }
+    size_t i = 0, j = 0;
+    while (i < na && j < nb) {
+        if (a[i] < b[j]) {
+            ++i;
+        } else if (b[j] < a[i]) {
+            ++j;
+        } else {
+            out[count++] = a[i];
+            ++i;
+            ++j;
+        }
+    }
+    return count;
+}
+
+}
 
 SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
                            const CandidateSets& candidates, const std::vector<int>& o,
-                           const std::unordered_map<int, int>& p, bool induced, bool cbj,
-                           bool count_only)
-    : data_graph(data), pattern_graph(pattern), order(o), pivot(p), is_induced(induced),
+                           const std::unordered_map<int, int>&,
+                           bool induced, bool cbj, bool count_only)
+    : data_graph(data), pattern_graph(pattern), order(o), is_induced(induced),
       enable_cbj(cbj), count_only(count_only) {
 
-    int max_v_id = 0;
-    for (int v_id : data_graph.original_node_ids) {
-        if (v_id > max_v_id) max_v_id = v_id;
+    const size_t num_p_nodes = pattern_graph.original_node_ids.size();
+    int max_v_id = data_graph.original_node_ids.empty() ? 0 : data_graph.original_node_ids.back();
+    for (const auto& pair : candidates) {
+        for (int v : pair.second) max_v_id = std::max(max_v_id, v);
     }
-    fast_mapping.assign(pattern_graph.original_node_ids.size(), -1);
-    fast_mapping_local_index.assign(pattern_graph.original_node_ids.size(), -1);
+    fast_mapping.assign(num_p_nodes, -1);
+    fast_mapping_local_index.assign(num_p_nodes, -1);
     fast_inverse_mapping.assign(max_v_id + 1, -1);
-
-    size_t num_p_nodes = pattern_graph.original_node_ids.size();
-    pattern_neighbors.resize(num_p_nodes);
-    pattern_non_neighbors.resize(num_p_nodes);
-
-    for (size_t u = 0; u < num_p_nodes; ++u) {
-        int u_id = pattern_graph.original_node_ids[u];
-        for (size_t u2 = 0; u2 < num_p_nodes; ++u2) {
-            if (u == u2) continue;
-            int u2_id = pattern_graph.original_node_ids[u2];
-            if (pattern_graph.hasEdge(u_id, u2_id)) {
-                pattern_neighbors[u].push_back(u2);
-            } else {
-                pattern_non_neighbors[u].push_back(u2);
-            }
-        }
-    }
 
     order_position.assign(num_p_nodes, -1);
     for (size_t d = 0; d < order.size(); ++d) {
         order_position[order[d]] = static_cast<int>(d);
     }
-
     conflict_set.assign(order.size(), std::vector<bool>(num_p_nodes, false));
 
     candidate_lists.assign(num_p_nodes, {});
@@ -45,64 +68,50 @@ SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
         int u = pair.first;
         if (u >= 0 && static_cast<size_t>(u) < num_p_nodes) {
             candidate_lists[u] = pair.second;
+            std::sort(candidate_lists[u].begin(), candidate_lists[u].end());
         }
     }
 
-    std::vector<std::unordered_map<int, int>> local_index(num_p_nodes);
-    for (size_t u = 0; u < num_p_nodes; ++u) {
-        local_index[u].reserve(candidate_lists[u].size());
-        for (size_t i = 0; i < candidate_lists[u].size(); ++i) {
-            local_index[u][candidate_lists[u][i]] = static_cast<int>(i);
-        }
-    }
+    std::vector<int> index_of(max_v_id + 1, -1);
+    size_t max_candidates = 0;
+    backward_edges.assign(order.size(), {});
+    backward_non_neighbors.assign(order.size(), {});
+    for (size_t d = 0; d < order.size(); ++d) {
+        int u = order[d];
+        const auto& cands_u = candidate_lists[u];
+        max_candidates = std::max(max_candidates, cands_u.size());
+        for (size_t j = 0; j < cands_u.size(); ++j) index_of[cands_u[j]] = static_cast<int>(j);
 
-    pivot_slot.assign(num_p_nodes, -1);
-    for (size_t u = 0; u < num_p_nodes; ++u) {
-        auto pivot_it = pivot.find(static_cast<int>(u));
-        if (pivot_it == pivot.end()) continue;
-        const auto& nbrs = pattern_neighbors[u];
-        for (size_t k = 0; k < nbrs.size(); ++k) {
-            if (nbrs[k] == pivot_it->second) {
-                pivot_slot[u] = static_cast<int>(k);
-                break;
+        int u_id = pattern_graph.original_node_ids[u];
+        for (size_t e = 0; e < d; ++e) {
+            int from_u = order[e];
+            if (!pattern_graph.hasEdge(pattern_graph.original_node_ids[from_u], u_id)) {
+                backward_non_neighbors[d].push_back(from_u);
+                continue;
             }
-        }
-    }
-
-    candidate_adj.assign(num_p_nodes, {});
-    for (size_t u = 0; u < num_p_nodes; ++u) {
-        const auto& nbrs = pattern_neighbors[u];
-        candidate_adj[u].resize(nbrs.size());
-
-        for (size_t k = 0; k < nbrs.size(); ++k) {
-            int u_nb = nbrs[k];
-            int nb_words = static_cast<int>((candidate_lists[u_nb].size() + 63) / 64);
-            auto& adj_for_edge = candidate_adj[u][k];
-            adj_for_edge.assign(candidate_lists[u].size(), std::vector<uint64_t>(nb_words, 0ULL));
-
-            for (size_t i = 0; i < candidate_lists[u].size(); ++i) {
-                int v = candidate_lists[u][i];
-                int v_idx = data_graph.get_node_idx(v);
-                if (v_idx == -1) continue;
-
-                Escape::EdgeIdx start = data_graph.c_graph->offsets[v_idx];
-                Escape::EdgeIdx end = data_graph.c_graph->offsets[v_idx + 1];
-                for (Escape::EdgeIdx e = start; e < end; ++e) {
-                    int nbr_v_idx = data_graph.c_graph->nbors[e];
-                    int nbr_v_id = data_graph.original_node_ids[nbr_v_idx];
-                    auto found = local_index[u_nb].find(nbr_v_id);
-                    if (found != local_index[u_nb].end()) {
-                        int j = found->second;
-                        adj_for_edge[i][j / 64] |= (1ULL << (j % 64));
+            BackwardEdge edge;
+            edge.from_u = from_u;
+            const auto& cands_from = candidate_lists[from_u];
+            edge.offsets.assign(cands_from.size() + 1, 0);
+            for (size_t i = 0; i < cands_from.size(); ++i) {
+                int v_idx = data_graph.get_node_idx(cands_from[i]);
+                if (v_idx != -1) {
+                    for (Escape::EdgeIdx k = data_graph.c_graph->offsets[v_idx];
+                         k < data_graph.c_graph->offsets[v_idx + 1]; ++k) {
+                        int j = index_of[data_graph.original_node_ids[data_graph.c_graph->nbors[k]]];
+                        if (j != -1) edge.targets.push_back(static_cast<uint32_t>(j));
                     }
                 }
+                edge.offsets[i + 1] = static_cast<uint32_t>(edge.targets.size());
             }
+            backward_edges[d].push_back(std::move(edge));
         }
-    }
-}
 
-bool SearchEngine::bit_test(const std::vector<uint64_t>& bits, int pos) {
-    return (bits[pos / 64] >> (pos % 64)) & 1ULL;
+        for (int v : cands_u) index_of[v] = -1;
+    }
+
+    local_candidates.assign(order.size() + 1, std::vector<int>(max_candidates));
+    intersect_buffer.assign(max_candidates, 0);
 }
 
 void SearchEngine::mergeConflicts(std::vector<bool>& target, const std::vector<bool>& source) {
@@ -117,6 +126,7 @@ void SearchEngine::run() {
     std::fill(fast_mapping.begin(), fast_mapping.end(), -1);
     std::fill(fast_mapping_local_index.begin(), fast_mapping_local_index.end(), -1);
     std::fill(fast_inverse_mapping.begin(), fast_inverse_mapping.end(), -1);
+    if (order.empty()) return;
     if (enable_cbj) {
         backtrack_cbj(0);
     } else {
@@ -124,85 +134,52 @@ void SearchEngine::run() {
     }
 }
 
-bool SearchEngine::is_valid(int u, int i, int v) {
-    if (fast_inverse_mapping[v] != -1) return false;
+void SearchEngine::computeLocalCandidates(int depth) {
+    auto& out = local_candidates[depth];
+    const auto& edges = backward_edges[depth];
+    const size_t num_candidates = candidate_lists[order[depth]].size();
 
-    int slot = pivot_slot[u];
-    if (slot != -1) {
-        int pivot_u = pattern_neighbors[u][slot];
-        if (fast_mapping[pivot_u] != -1) {
-            if (!bit_test(candidate_adj[u][slot][i], fast_mapping_local_index[pivot_u])) {
-                return false;
-            }
-        }
+    if (edges.empty()) {
+        out.resize(num_candidates);
+        for (size_t j = 0; j < num_candidates; ++j) out[j] = static_cast<int>(j);
+        return;
     }
 
-    const auto& nbrs = pattern_neighbors[u];
-    for (size_t k = 0; k < nbrs.size(); ++k) {
-        int u_nb = nbrs[k];
-        if (fast_mapping[u_nb] != -1) {
-            if (!bit_test(candidate_adj[u][k][i], fast_mapping_local_index[u_nb])) {
-                return false;
-            }
+    int shortest = 0;
+    size_t shortest_len = SIZE_MAX;
+    for (size_t k = 0; k < edges.size(); ++k) {
+        int i = fast_mapping_local_index[edges[k].from_u];
+        size_t len = edges[k].offsets[i + 1] - edges[k].offsets[i];
+        if (len < shortest_len) {
+            shortest_len = len;
+            shortest = static_cast<int>(k);
         }
     }
+    const BackwardEdge& first = edges[shortest];
+    int first_i = fast_mapping_local_index[first.from_u];
+    out.assign(first.targets.begin() + first.offsets[first_i],
+               first.targets.begin() + first.offsets[first_i + 1]);
 
-    if (is_induced) {
-        for (int u_non_nb : pattern_non_neighbors[u]) {
-            int v_non_nb = fast_mapping[u_non_nb];
-            if (v_non_nb != -1) {
-                if (data_graph.hasEdge(v, v_non_nb)) {
-                    return false;
-                }
-            }
-        }
+    size_t size = out.size();
+    for (size_t k = 0; k < edges.size() && size > 0; ++k) {
+        if (static_cast<int>(k) == shortest) continue;
+        int i = fast_mapping_local_index[edges[k].from_u];
+        const int* list = reinterpret_cast<const int*>(edges[k].targets.data()) + edges[k].offsets[i];
+        size_t len = edges[k].offsets[i + 1] - edges[k].offsets[i];
+        size = intersectSorted(out.data(), size, list, len, intersect_buffer.data());
+        std::copy(intersect_buffer.begin(), intersect_buffer.begin() + size, out.begin());
     }
-
-    return true;
+    out.resize(size);
 }
 
-bool SearchEngine::is_valid_cbj(int u, int i, int v, int depth, int& conflict_u) {
-    int current_mapped_u = fast_inverse_mapping[v];
-    if (current_mapped_u != -1) {
-        conflict_u = current_mapped_u;
-        return false;
-    }
-
-    int slot = pivot_slot[u];
-    if (slot != -1) {
-        int pivot_u = pattern_neighbors[u][slot];
-        if (fast_mapping[pivot_u] != -1) {
-            if (!bit_test(candidate_adj[u][slot][i], fast_mapping_local_index[pivot_u])) {
-                conflict_u = pivot_u;
-                return false;
-            }
+bool SearchEngine::inducedConflict(int u, int v, int& conflict_u) const {
+    for (int u_non_nb : backward_non_neighbors[order_position[u]]) {
+        if (data_graph.hasEdge(v, fast_mapping[u_non_nb])) {
+            conflict_u = u_non_nb;
+            return true;
         }
     }
-
-    const auto& nbrs = pattern_neighbors[u];
-    for (size_t k = 0; k < nbrs.size(); ++k) {
-        int u_nb = nbrs[k];
-        if (fast_mapping[u_nb] != -1) {
-            if (!bit_test(candidate_adj[u][k][i], fast_mapping_local_index[u_nb])) {
-                conflict_u = u_nb;
-                return false;
-            }
-        }
-    }
-
-    if (is_induced) {
-        for (int u_non_nb : pattern_non_neighbors[u]) {
-            int v_non_nb = fast_mapping[u_non_nb];
-            if (v_non_nb != -1) {
-                if (data_graph.hasEdge(v, v_non_nb)) {
-                    conflict_u = u_non_nb;
-                    return false;
-                }
-            }
-        }
-    }
-
-    return true;
+    return false;
 }
 
 void SearchEngine::backtrack(int depth) {
@@ -215,21 +192,25 @@ void SearchEngine::backtrack(int depth) {
     }
 
     int u = order[depth];
-    const auto& candidates_u = candidate_lists[u];
-    for (size_t i = 0; i < candidates_u.size(); ++i) {
-        int v = candidates_u[i];
+    computeLocalCandidates(depth);
+    const auto& cands_u = candidate_lists[u];
+    const auto& local = local_candidates[depth];
+    for (size_t k = 0; k < local.size(); ++k) {
+        int i = local[k];
+        int v = cands_u[i];
+        if (fast_inverse_mapping[v] != -1) continue;
+        int unused;
+        if (is_induced && inducedConflict(u, v, unused)) continue;
 
-        if (is_valid(u, static_cast<int>(i), v)) {
-            fast_mapping[u] = v;
-            fast_mapping_local_index[u] = static_cast<int>(i);
-            fast_inverse_mapping[v] = u;
+        fast_mapping[u] = v;
+        fast_mapping_local_index[u] = i;
+        fast_inverse_mapping[v] = u;
 
-            backtrack(depth + 1);
+        backtrack(depth + 1);
 
-            fast_mapping[u] = -1;
-            fast_mapping_local_index[u] = -1;
-            fast_inverse_mapping[v] = -1;
-        }
+        fast_mapping[u] = -1;
+        fast_mapping_local_index[u] = -1;
+        fast_inverse_mapping[v] = -1;
     }
 }
 
@@ -246,36 +227,46 @@ int SearchEngine::backtrack_cbj(int depth) {
     std::fill(conflict_set[depth].begin(), conflict_set[depth].end(), false);
     long long match_count_before = match_count;
 
-    const auto& candidates_u = candidate_lists[u];
-    for (size_t i = 0; i < candidates_u.size(); ++i) {
-        int v = candidates_u[i];
+    computeLocalCandidates(depth);
+    const auto& cands_u = candidate_lists[u];
+    const auto& local = local_candidates[depth];
 
-        int conflict_u = -1;
-        if (is_valid_cbj(u, static_cast<int>(i), v, depth, conflict_u)) {
-            fast_mapping[u] = v;
-            fast_mapping_local_index[u] = static_cast<int>(i);
-            fast_inverse_mapping[v] = u;
+    if (local.size() < cands_u.size()) {
+        for (const auto& edge : backward_edges[depth]) {
+            conflict_set[depth][edge.from_u] = true;
+        }
+    }
 
-            int backjump_depth = backtrack_cbj(depth + 1);
+    for (size_t k = 0; k < local.size(); ++k) {
+        int i = local[k];
+        int v = cands_u[i];
 
-            fast_mapping[u] = -1;
-            fast_mapping_local_index[u] = -1;
-            fast_inverse_mapping[v] = -1;
+        int conflict_u = fast_inverse_mapping[v];
+        if (conflict_u == -1 && is_induced) inducedConflict(u, v, conflict_u);
+        if (conflict_u != -1) {
+            conflict_set[depth][conflict_u] = true;
+            continue;
+        }
 
-            if (backjump_depth >= 0 && backjump_depth < depth) {
-                conflict_set[depth][order[backjump_depth]] = true;
+        fast_mapping[u] = v;
+        fast_mapping_local_index[u] = i;
+        fast_inverse_mapping[v] = u;
+
+        int backjump_depth = backtrack_cbj(depth + 1);
+
+        fast_mapping[u] = -1;
+        fast_mapping_local_index[u] = -1;
+        fast_inverse_mapping[v] = -1;
+
+        if (backjump_depth >= 0 && backjump_depth < depth) {
+            conflict_set[depth][order[backjump_depth]] = true;
+        }
+
+        if (backjump_depth < depth - 1) {
+            if (backjump_depth >= 0) {
+                mergeConflicts(conflict_set[backjump_depth], conflict_set[depth]);
             }
-
-            if (backjump_depth < depth - 1) {
-                if (backjump_depth >= 0) {
-                    mergeConflicts(conflict_set[backjump_depth], conflict_set[depth]);
-                }
-                return backjump_depth;
-            }
-        } else {
-            if (conflict_u != -1) {
-                conflict_set[depth][conflict_u] = true;
-            }
+            return backjump_depth;
         }
     }
 

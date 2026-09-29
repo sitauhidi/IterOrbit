@@ -321,8 +321,13 @@ bool FilterEngine::semiJoinFilter(const AppGraph& neighbor_graph) {
 }
 
 bool FilterEngine::orbitFilter() {
+    using Clock = std::chrono::high_resolution_clock;
+    auto ms_since = [](Clock::time_point start) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    };
     const AppGraph* graph_for_orbit_counting = nullptr;
 
+    auto subgraph_start = Clock::now();
     if (this->use_subgraph) {
         if (print_stats) {
             std::cout << "\nCreating subgraph for orbit counting..." << std::endl;
@@ -341,9 +346,14 @@ bool FilterEngine::orbitFilter() {
         this->candidate_subgraph = this->data_graph;
     }
 
+    double subgraph_ms = ms_since(subgraph_start);
+
+    auto count_start = Clock::now();
     EVOKEOrbitCounter data_counter(*graph_for_orbit_counting, graphlet_size);
     OrbitCounts data_orbits = data_counter.count();
+    double count_ms = ms_since(count_start);
 
+    auto compare_start = Clock::now();
     for (auto& pair : candidate_sets) {
         int u = pair.first;
         const auto& orbit_u = pattern_orbits.at(pattern_graph.get_node_idx(u));
@@ -371,6 +381,18 @@ bool FilterEngine::orbitFilter() {
         if (candidates_v.empty()) return false;
     }
 
+    if (print_stats) {
+        const OrbitCountTimings& ot = data_counter.timings();
+        std::cout << "Orbit stage breakdown (ms): subgraph " << subgraph_ms
+                  << ", relabel+DAG " << ot.relabel_dag_ms << ", 3-orbits " << ot.three_ms
+                  << ", 4-closed-form " << ot.four_closed_ms << ", paw/diamond " << ot.four_other_ms
+                  << ", 4-cycle " << ot.four_cycle_ms << ", 4-clique " << ot.four_clique_ms
+                  << ", copy " << ot.copy_ms << ", count-total " << count_ms
+                  << ", compare " << ms_since(compare_start)
+                  << " | subgraph |V|=" << graph_for_orbit_counting->original_node_ids.size()
+                  << " |E|=" << (graph_for_orbit_counting->c_graph ? graph_for_orbit_counting->c_graph->nEdges / 2 : 0)
+                  << std::endl;
+    }
     return true;
 }
 

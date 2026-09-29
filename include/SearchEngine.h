@@ -1,6 +1,7 @@
 #ifndef SEARCH_ENGINE_H
 #define SEARCH_ENGINE_H
 
+#include <cstdint>
 #include "AppGraph.h"
 #include "FilterEngine.h"
 
@@ -15,52 +16,42 @@ public:
 
     void run();
     const std::vector<Mapping>& getMatches() const { return matches; }
-    // In count-only mode, matches is never populated (avoids materializing every
-    // embedding for patterns with huge result counts -- SOTA tools compared against
-    // report a count, not a materialized match set, so this keeps a speed
-    // comparison apples-to-apples instead of measuring vector-growth cost too).
-    // Use this instead of getMatches().size() so the count is correct either way.
     long long getMatchCount() const { return count_only ? match_count : static_cast<long long>(matches.size()); }
 
 private:
+    struct BackwardEdge {
+        int from_u;
+        std::vector<uint32_t> offsets;
+        std::vector<uint32_t> targets;
+    };
+
     void backtrack(int depth);
-    bool is_valid(int u, int i, int v);
-    static bool bit_test(const std::vector<uint64_t>& bits, int pos);
+    int backtrack_cbj(int depth);
+    void computeLocalCandidates(int depth);
+    bool inducedConflict(int u, int v, int& conflict_u) const;
+    static void mergeConflicts(std::vector<bool>& target, const std::vector<bool>& source);
 
     const AppGraph& data_graph;
     const AppGraph& pattern_graph;
     const std::vector<int>& order;
-    const std::unordered_map<int, int>& pivot;
     bool is_induced;
-
-    std::vector<int> fast_mapping;
-    std::vector<int> fast_inverse_mapping;
-    std::vector<int> fast_mapping_local_index;
-
-    std::vector<std::vector<int>> pattern_neighbors;
-    std::vector<std::vector<int>> pattern_non_neighbors;
-
-    std::vector<std::vector<int>> candidate_lists;
-    std::vector<std::vector<std::vector<std::vector<uint64_t>>>> candidate_adj;
-    std::vector<int> pivot_slot;
-
-    std::vector<int> order_position;
-    // Per-depth boolean membership set of pattern vertices (see SearchEngine.cpp
-    // constructor comment) -- bounded size, not an ever-growing list.
-    std::vector<std::vector<bool>> conflict_set;
-    static void mergeConflicts(std::vector<bool>& target, const std::vector<bool>& source);
     bool enable_cbj;
-
     bool count_only;
     long long match_count = 0;
 
-    bool enable_symmetry_breaking = false;
-    std::vector<int> symmetry_parent;
+    std::vector<int> fast_mapping;             // pattern vertex -> data vertex ID, -1 if unmatched
+    std::vector<int> fast_mapping_local_index; // pattern vertex -> index into its candidate list
+    std::vector<int> fast_inverse_mapping;     // data vertex ID -> pattern vertex, -1 if unused
 
-    int backtrack_cbj(int depth);
-    bool is_valid_cbj(int u, int i, int v, int depth, int& conflict_u);
+    std::vector<std::vector<int>> candidate_lists;       // sorted by data vertex ID
+    std::vector<std::vector<BackwardEdge>> backward_edges; // per depth
+    std::vector<std::vector<int>> backward_non_neighbors;  // per depth, for induced search
+    std::vector<std::vector<int>> local_candidates;        // per depth, reused buffers
+    std::vector<int> intersect_buffer;
+
+    std::vector<int> order_position;
+    std::vector<std::vector<bool>> conflict_set;
 
     std::vector<Mapping> matches;
 };
-
 #endif
