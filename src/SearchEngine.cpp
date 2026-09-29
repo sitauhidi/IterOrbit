@@ -3,8 +3,10 @@
 
 SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
                            const CandidateSets& candidates, const std::vector<int>& o,
-                           const std::unordered_map<int, int>& p, bool induced, bool cbj)
-    : data_graph(data), pattern_graph(pattern), order(o), pivot(p), is_induced(induced), enable_cbj(cbj) {
+                           const std::unordered_map<int, int>& p, bool induced, bool cbj,
+                           bool count_only)
+    : data_graph(data), pattern_graph(pattern), order(o), pivot(p), is_induced(induced),
+      enable_cbj(cbj), count_only(count_only) {
 
     int max_v_id = 0;
     for (int v_id : data_graph.original_node_ids) {
@@ -36,7 +38,7 @@ SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
         order_position[order[d]] = static_cast<int>(d);
     }
 
-    conflict_set.resize(order.size());
+    conflict_set.assign(order.size(), std::vector<bool>(num_p_nodes, false));
 
     candidate_lists.assign(num_p_nodes, {});
     for (const auto& pair : candidates) {
@@ -103,8 +105,15 @@ bool SearchEngine::bit_test(const std::vector<uint64_t>& bits, int pos) {
     return (bits[pos / 64] >> (pos % 64)) & 1ULL;
 }
 
+void SearchEngine::mergeConflicts(std::vector<bool>& target, const std::vector<bool>& source) {
+    for (size_t x = 0; x < source.size(); ++x) {
+        if (source[x]) target[x] = true;
+    }
+}
+
 void SearchEngine::run() {
     matches.clear();
+    match_count = 0;
     std::fill(fast_mapping.begin(), fast_mapping.end(), -1);
     std::fill(fast_mapping_local_index.begin(), fast_mapping_local_index.end(), -1);
     std::fill(fast_inverse_mapping.begin(), fast_inverse_mapping.end(), -1);
@@ -198,7 +207,10 @@ bool SearchEngine::is_valid_cbj(int u, int i, int v, int depth, int& conflict_u)
 
 void SearchEngine::backtrack(int depth) {
     if (static_cast<size_t>(depth) == order.size()) {
-        matches.push_back(fast_mapping);
+        ++match_count;
+        if (!count_only) {
+            matches.push_back(fast_mapping);
+        }
         return;
     }
 
@@ -223,13 +235,16 @@ void SearchEngine::backtrack(int depth) {
 
 int SearchEngine::backtrack_cbj(int depth) {
     if (static_cast<size_t>(depth) == order.size()) {
-        matches.push_back(fast_mapping);
+        ++match_count;
+        if (!count_only) {
+            matches.push_back(fast_mapping);
+        }
         return depth - 1;
     }
 
     int u = order[depth];
-    conflict_set[depth].clear();
-    size_t matches_before = matches.size();
+    std::fill(conflict_set[depth].begin(), conflict_set[depth].end(), false);
+    long long match_count_before = match_count;
 
     const auto& candidates_u = candidate_lists[u];
     for (size_t i = 0; i < candidates_u.size(); ++i) {
@@ -248,26 +263,25 @@ int SearchEngine::backtrack_cbj(int depth) {
             fast_inverse_mapping[v] = -1;
 
             if (backjump_depth >= 0 && backjump_depth < depth) {
-                conflict_set[depth].push_back(order[backjump_depth]);
+                conflict_set[depth][order[backjump_depth]] = true;
             }
 
             if (backjump_depth < depth - 1) {
                 if (backjump_depth >= 0) {
-                    conflict_set[backjump_depth].insert(conflict_set[backjump_depth].end(),
-                                                         conflict_set[depth].begin(),
-                                                         conflict_set[depth].end());
+                    mergeConflicts(conflict_set[backjump_depth], conflict_set[depth]);
                 }
                 return backjump_depth;
             }
         } else {
             if (conflict_u != -1) {
-                conflict_set[depth].push_back(conflict_u);
+                conflict_set[depth][conflict_u] = true;
             }
         }
     }
 
     int max_conflict_depth = -1;
-    for (int conf_u : conflict_set[depth]) {
+    for (size_t conf_u = 0; conf_u < conflict_set[depth].size(); ++conf_u) {
+        if (!conflict_set[depth][conf_u]) continue;
         int d_conf = order_position[conf_u];
         if (d_conf > max_conflict_depth && d_conf < depth) {
             max_conflict_depth = d_conf;
@@ -275,13 +289,11 @@ int SearchEngine::backtrack_cbj(int depth) {
     }
 
     int target_depth = (max_conflict_depth != -1) ? max_conflict_depth : (depth - 1);
-    if (matches.size() > matches_before) {
+    if (match_count > match_count_before) {
         target_depth = depth - 1;
     }
     if (target_depth >= 0 && target_depth < static_cast<int>(depth)) {
-        conflict_set[target_depth].insert(conflict_set[target_depth].end(),
-                                           conflict_set[depth].begin(),
-                                           conflict_set[depth].end());
+        mergeConflicts(conflict_set[target_depth], conflict_set[depth]);
     }
 
     return target_depth;

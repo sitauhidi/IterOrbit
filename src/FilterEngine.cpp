@@ -55,8 +55,8 @@ bool FilterEngine::run() {
     }
 
     max_data_label = 0;
-    for (const auto& kv : data_graph.labels) {
-        if (kv.second > max_data_label) max_data_label = kv.second;
+    for (int label : data_graph.fast_labels) {
+        if (label > max_data_label) max_data_label = label;
     }
 
     bool converged = false;

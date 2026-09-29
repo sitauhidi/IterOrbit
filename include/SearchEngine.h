@@ -10,10 +10,17 @@ class SearchEngine {
 public:
     SearchEngine(const AppGraph& data, const AppGraph& pattern,
                  const CandidateSets& candidates, const std::vector<int>& order,
-                 const std::unordered_map<int, int>& pivot, bool induced, bool cbj);
+                 const std::unordered_map<int, int>& pivot, bool induced, bool cbj,
+                 bool count_only = false);
 
     void run();
     const std::vector<Mapping>& getMatches() const { return matches; }
+    // In count-only mode, matches is never populated (avoids materializing every
+    // embedding for patterns with huge result counts -- SOTA tools compared against
+    // report a count, not a materialized match set, so this keeps a speed
+    // comparison apples-to-apples instead of measuring vector-growth cost too).
+    // Use this instead of getMatches().size() so the count is correct either way.
+    long long getMatchCount() const { return count_only ? match_count : static_cast<long long>(matches.size()); }
 
 private:
     void backtrack(int depth);
@@ -38,8 +45,14 @@ private:
     std::vector<int> pivot_slot;
 
     std::vector<int> order_position;
-    std::vector<std::vector<int>> conflict_set;
+    // Per-depth boolean membership set of pattern vertices (see SearchEngine.cpp
+    // constructor comment) -- bounded size, not an ever-growing list.
+    std::vector<std::vector<bool>> conflict_set;
+    static void mergeConflicts(std::vector<bool>& target, const std::vector<bool>& source);
     bool enable_cbj;
+
+    bool count_only;
+    long long match_count = 0;
 
     bool enable_symmetry_breaking = false;
     std::vector<int> symmetry_parent;

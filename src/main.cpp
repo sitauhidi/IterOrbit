@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include <iomanip>
 
 #include "AppGraph.h"
 #include "FilterEngine.h"
@@ -24,7 +25,18 @@ void print_usage() {
               << "  --orbit-throttle-threshold <f>  Min candidate-shrink fraction to keep running the\n"
               << "                                  orbit recount every iteration (default: 0.05)\n"
               << "  --disable-semi-join      Skip the edge-consistency (semi-join) filter stage\n"
-              << "                           (enabled by default)\n";
+              << "                           (enabled by default)\n"
+              << "  --count-only             Count matches without materializing each embedding\n"
+              << "                           (avoids O(matches x pattern-size) memory for patterns\n"
+              << "                           with huge result counts; incompatible with --verbose)\n";
+}
+
+void print_ms(const char* label, double ms) {
+    std::ios::fmtflags flags = std::cout.flags();
+    std::streamsize precision = std::cout.precision();
+    std::cout << label << std::fixed << std::setprecision(3) << ms << " ms." << std::endl;
+    std::cout.flags(flags);
+    std::cout.precision(precision);
 }
 
 int main(int argc, char* argv[]) {
@@ -46,6 +58,7 @@ int main(int argc, char* argv[]) {
     bool orbit_throttle = false;
     double orbit_throttle_threshold = 0.05;
     bool enable_semi_join = true;
+    bool count_only = false;
 
     bool iterate_specified = false;
 
@@ -94,6 +107,8 @@ int main(int argc, char* argv[]) {
             }
         } else if (args[i] == "--disable-semi-join") {
             enable_semi_join = false;
+        } else if (args[i] == "--count-only") {
+            count_only = true;
         }
     }
 
@@ -112,7 +127,14 @@ int main(int argc, char* argv[]) {
         print_usage();
         return 1;
     }
+    if (count_only && verbose) {
+        std::cerr << "Error: --count-only cannot be used together with --verbose "
+                     "(count-only mode never materializes matches to print).\n";
+        print_usage();
+        return 1;
+    }
 
+    auto load_start = std::chrono::high_resolution_clock::now();
     AppGraph data_graph, pattern_graph;
     if (!data_graph.readFromFile(data_path)) {
         std::cerr << "Error reading data graph from " << data_path << std::endl;
@@ -122,7 +144,9 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error reading pattern graph from " << pattern_path << std::endl;
         return 1;
     }
+    std::chrono::duration<double, std::milli> load_elapsed = std::chrono::high_resolution_clock::now() - load_start;
     std::cout << "Graphs loaded successfully." << std::endl;
+    print_ms("Total loading time: ", load_elapsed.count());
     std::cout << "Search type: " << (induced_search ? "Induced" : "Non-Induced") << std::endl;
     std::cout << "Backjumping: " << (cbj_search ? "Enabled (CBJ)" : "Disabled") << std::endl;
     std::cout << "Graphlet size: " << graphlet_size << std::endl;
@@ -147,8 +171,9 @@ int main(int argc, char* argv[]) {
     }
     
     auto filter_end = std::chrono::high_resolution_clock::now();
-    auto filter_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(filter_end - start);
-    std::cout << "\nTotal filtering time: " << filter_elapsed.count() << " ms." << std::endl;
+    // Fractional ms, printed fixed-point so large values never switch to exponent notation
+    std::chrono::duration<double, std::milli> filter_elapsed = filter_end - start;
+    print_ms("\nTotal filtering time: ", filter_elapsed.count());
 
     if (filter_only) {
         return 0;
@@ -164,19 +189,19 @@ int main(int argc, char* argv[]) {
     auto search_start = std::chrono::high_resolution_clock::now();
     SearchEngine search_engine(filter_engine.getCandidateSubgraph(), pattern_graph,
                                filter_engine.getCandidateSets(), order_engine.getOrder(),
-                               order_engine.getPivot(), induced_search, cbj_search);
+                               order_engine.getPivot(), induced_search, cbj_search, count_only);
     search_engine.run();
     auto search_end = std::chrono::high_resolution_clock::now();
-    auto search_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(search_end - search_start);
-    std::cout << "Total searching time: " << search_elapsed.count() << " ms." << std::endl;
+    std::chrono::duration<double, std::milli> search_elapsed = search_end - search_start;
+    print_ms("Total searching time: ", search_elapsed.count());
 
     auto end = std::chrono::high_resolution_clock::now();
-    auto total_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    
-    const auto& matches = search_engine.getMatches();
-    std::cout << "\nMatches found: " << matches.size() << std::endl;
-    
+    std::chrono::duration<double, std::milli> total_elapsed = end - start;
+
+    std::cout << "\nMatches found: " << search_engine.getMatchCount() << std::endl;
+
     if (verbose) {
+        const auto& matches = search_engine.getMatches();
         std::cout << "\n--- Found Matches ---" << std::endl;
         for (const auto& match : matches) {
             std::cout << "{";
@@ -191,7 +216,7 @@ int main(int argc, char* argv[]) {
         std::cout << "---------------------" << std::endl;
     }
 
-    std::cout << "\nTotal execution time: " << total_elapsed.count() << " ms." << std::endl;
+    print_ms("\nTotal execution time: ", total_elapsed.count());
 
     return 0;
 }

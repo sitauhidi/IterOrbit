@@ -1,6 +1,5 @@
 #include "AppGraph.h"
 #include <fstream>
-#include <sstream>
 #include <algorithm>
 #include <stdexcept>
 
@@ -30,9 +29,7 @@ AppGraph& AppGraph::operator=(const AppGraph& other) {
 }
 
 void AppGraph::copy_from(const AppGraph& other) {
-    this->labels = other.labels;
     this->original_node_ids = other.original_node_ids;
-    this->node_to_idx = other.node_to_idx;
     this->fast_node_to_idx = other.fast_node_to_idx;
     this->fast_labels = other.fast_labels;
     
@@ -49,69 +46,122 @@ void AppGraph::copy_from(const AppGraph& other) {
     }
 }
 
+namespace {
+
+inline void skipBlanks(const char*& p, const char* end) {
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\r')) ++p;
+}
+
+inline void skipLine(const char*& p, const char* end) {
+    while (p < end && *p != '\n') ++p;
+    if (p < end) ++p;
+}
+
+inline int parseInt(const char*& p, const char* end) {
+    skipBlanks(p, end);
+    bool negative = (p < end && *p == '-');
+    if (negative) ++p;
+    int value = 0;
+    while (p < end && *p >= '0' && *p <= '9') {
+        value = value * 10 + (*p - '0');
+        ++p;
+    }
+    return negative ? -value : value;
+}
+
+}
+
 bool AppGraph::readFromFile(const std::string& filepath) {
     clear();
-    std::ifstream file(filepath);
+    std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) return false;
+    file.seekg(0, std::ios::end);
+    std::string buffer(static_cast<size_t>(file.tellg()), '\0');
+    file.seekg(0, std::ios::beg);
+    file.read(&buffer[0], buffer.size());
 
-    std::string line;
+    std::vector<int> vertex_ids, vertex_labels;
     std::vector<std::pair<int, int>> edges;
-    std::unordered_set<int> node_set;
-
-    while (std::getline(file, line)) {
-        std::stringstream ss(line);
-        std::string token;
-        ss >> token;
-        if (token == "v") {
-            int node_id, label;
-            ss >> node_id >> label;
-            labels[node_id] = label;
-            node_set.insert(node_id);
-        } else if (token == "e") {
-            int u, v;
-            ss >> u >> v;
+    const char* p = buffer.data();
+    const char* end = p + buffer.size();
+    while (p < end) {
+        skipBlanks(p, end);
+        char type = (p + 1 < end && (p[1] == ' ' || p[1] == '\t')) ? *p : '\0';
+        if (type == 'v') {
+            ++p;
+            int node_id = parseInt(p, end);
+            int label = parseInt(p, end);
+            vertex_ids.push_back(node_id);
+            vertex_labels.push_back(label);
+        } else if (type == 'e') {
+            ++p;
+            int u = parseInt(p, end);
+            int v = parseInt(p, end);
             edges.emplace_back(u, v);
         }
+        skipLine(p, end);
     }
 
-    original_node_ids.assign(node_set.begin(), node_set.end());
+    build(vertex_ids, vertex_labels, edges);
+    return true;
+}
+
+bool AppGraph::buildFromLabelsAndEdges(const std::vector<int>& vertex_labels,
+                                       const std::vector<std::pair<int, int>>& edges) {
+    clear();
+    std::vector<int> vertex_ids(vertex_labels.size());
+    for (size_t id = 0; id < vertex_ids.size(); ++id) {
+        vertex_ids[id] = static_cast<int>(id);
+    }
+    build(vertex_ids, vertex_labels, edges);
+    return true;
+}
+
+void AppGraph::build(const std::vector<int>& vertex_ids, const std::vector<int>& vertex_labels,
+                     const std::vector<std::pair<int, int>>& edges) {
+    original_node_ids = vertex_ids;
     std::sort(original_node_ids.begin(), original_node_ids.end());
+    original_node_ids.erase(std::unique(original_node_ids.begin(), original_node_ids.end()),
+                            original_node_ids.end());
 
     int max_id = original_node_ids.empty() ? -1 : original_node_ids.back();
     fast_node_to_idx.assign(max_id + 1, -1);
     fast_labels.assign(max_id + 1, -1);
-
     for (size_t i = 0; i < original_node_ids.size(); ++i) {
-        node_to_idx[original_node_ids[i]] = i;
-        fast_node_to_idx[original_node_ids[i]] = i;
-        fast_labels[original_node_ids[i]] = labels.at(original_node_ids[i]);
+        fast_node_to_idx[original_node_ids[i]] = static_cast<int>(i);
+    }
+    for (size_t k = 0; k < vertex_ids.size(); ++k) {
+        fast_labels[vertex_ids[k]] = vertex_labels[k];
     }
 
-    std::vector<std::vector<int>> adj_temp(original_node_ids.size());
-    for (const auto& edge : edges) {
-        int u_idx = fast_node_to_idx[edge.first];
-        int v_idx = fast_node_to_idx[edge.second];
-        adj_temp[u_idx].push_back(v_idx);
-        adj_temp[v_idx].push_back(u_idx);
-    }
-    
+    const size_t n = original_node_ids.size();
     c_graph = new Escape::CGraph();
-    c_graph->nVertices = original_node_ids.size();
-    c_graph->offsets = new Escape::EdgeIdx[c_graph->nVertices + 1];
-    
-    std::vector<Escape::VertexIdx> nbors_flat;
-    c_graph->offsets[0] = 0;
-    for (size_t i = 0; i < (size_t)c_graph->nVertices; ++i) {
-        std::sort(adj_temp[i].begin(), adj_temp[i].end());
-        nbors_flat.insert(nbors_flat.end(), adj_temp[i].begin(), adj_temp[i].end());
-        c_graph->offsets[i+1] = nbors_flat.size();
+    c_graph->nVertices = n;
+    c_graph->offsets = new Escape::EdgeIdx[n + 1]();
+    for (const auto& edge : edges) {
+        int u_idx = get_node_idx(edge.first);
+        int v_idx = get_node_idx(edge.second);
+        if (u_idx == -1 || v_idx == -1) continue;
+        ++c_graph->offsets[u_idx + 1];
+        ++c_graph->offsets[v_idx + 1];
+    }
+    for (size_t i = 0; i < n; ++i) {
+        c_graph->offsets[i + 1] += c_graph->offsets[i];
     }
 
-    c_graph->nEdges = nbors_flat.size();
+    c_graph->nEdges = c_graph->offsets[n];
     c_graph->nbors = new Escape::VertexIdx[c_graph->nEdges];
-    std::copy(nbors_flat.begin(), nbors_flat.end(), c_graph->nbors);
-
-    return true;
+    std::vector<Escape::EdgeIdx> next(c_graph->offsets, c_graph->offsets + n);
+    for (const auto& edge : edges) {
+        int u_idx = get_node_idx(edge.first);
+        int v_idx = get_node_idx(edge.second);
+        if (u_idx == -1 || v_idx == -1) continue;
+        c_graph->nbors[next[u_idx]++] = v_idx;
+        c_graph->nbors[next[v_idx]++] = u_idx;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        std::sort(c_graph->nbors + c_graph->offsets[i], c_graph->nbors + c_graph->offsets[i + 1]);
+    }
 }
 
 int AppGraph::degree(int node_id) const {
@@ -147,11 +197,10 @@ std::vector<int> AppGraph::getNeighbors(int node_id) const {
 
 AppGraph AppGraph::createSubgraph(const AppGraph& original, const std::unordered_set<int>& node_subset) {
     AppGraph subgraph;
-    
+
+    subgraph.original_node_ids.reserve(node_subset.size());
     for (int node_id : node_subset) {
-        int lbl = original.get_label_fast(node_id);
-        if (lbl != -1) {
-            subgraph.labels[node_id] = lbl;
+        if (original.get_label_fast(node_id) != -1) {
             subgraph.original_node_ids.push_back(node_id);
         }
     }
@@ -160,47 +209,36 @@ AppGraph AppGraph::createSubgraph(const AppGraph& original, const std::unordered
     int max_id = subgraph.original_node_ids.empty() ? -1 : subgraph.original_node_ids.back();
     subgraph.fast_node_to_idx.assign(max_id + 1, -1);
     subgraph.fast_labels.assign(max_id + 1, -1);
-
     for (size_t i = 0; i < subgraph.original_node_ids.size(); ++i) {
         int node_id = subgraph.original_node_ids[i];
-        subgraph.node_to_idx[node_id] = i;
-        subgraph.fast_node_to_idx[node_id] = i;
-        subgraph.fast_labels[node_id] = subgraph.labels.at(node_id);
+        subgraph.fast_node_to_idx[node_id] = static_cast<int>(i);
+        subgraph.fast_labels[node_id] = original.get_label_fast(node_id);
     }
 
-    std::vector<std::vector<int>> adj_temp(subgraph.original_node_ids.size());
-    for (size_t u_sub_idx = 0; u_sub_idx < subgraph.original_node_ids.size(); ++u_sub_idx) {
-        int u_orig_id = subgraph.original_node_ids[u_sub_idx];
-        int u_orig_idx = original.get_node_idx(u_orig_id);
-
-        Escape::EdgeIdx start = original.c_graph->offsets[u_orig_idx];
-        Escape::EdgeIdx end = original.c_graph->offsets[u_orig_idx + 1];
-        
-        for (Escape::EdgeIdx i = start; i < end; ++i) {
-            int v_orig_idx = original.c_graph->nbors[i];
-            int v_orig_id = original.original_node_ids[v_orig_idx];
-            int v_sub_idx = subgraph.get_node_idx(v_orig_id);
-            if (v_sub_idx != -1) {
-                adj_temp[u_sub_idx].push_back(v_sub_idx);
-            }
-        }
-    }
-    
+    const size_t n = subgraph.original_node_ids.size();
     subgraph.c_graph = new Escape::CGraph();
-    subgraph.c_graph->nVertices = subgraph.original_node_ids.size();
-    subgraph.c_graph->offsets = new Escape::EdgeIdx[subgraph.c_graph->nVertices + 1];
-    
-    std::vector<Escape::VertexIdx> nbors_flat;
-    subgraph.c_graph->offsets[0] = 0;
-    for (size_t i = 0; i < (size_t)subgraph.c_graph->nVertices; ++i) {
-        std::sort(adj_temp[i].begin(), adj_temp[i].end());
-        nbors_flat.insert(nbors_flat.end(), adj_temp[i].begin(), adj_temp[i].end());
-        subgraph.c_graph->offsets[i+1] = nbors_flat.size();
+    subgraph.c_graph->nVertices = n;
+    subgraph.c_graph->offsets = new Escape::EdgeIdx[n + 1]();
+    auto for_each_kept_neighbor = [&](size_t u_sub_idx, auto&& emit) {
+        int u_orig_idx = original.get_node_idx(subgraph.original_node_ids[u_sub_idx]);
+        for (Escape::EdgeIdx e = original.c_graph->offsets[u_orig_idx];
+             e < original.c_graph->offsets[u_orig_idx + 1]; ++e) {
+            int v_sub_idx = subgraph.get_node_idx(original.original_node_ids[original.c_graph->nbors[e]]);
+            if (v_sub_idx != -1) emit(v_sub_idx);
+        }
+    };
+    for (size_t u = 0; u < n; ++u) {
+        for_each_kept_neighbor(u, [&](int) { ++subgraph.c_graph->offsets[u + 1]; });
+    }
+    for (size_t u = 0; u < n; ++u) {
+        subgraph.c_graph->offsets[u + 1] += subgraph.c_graph->offsets[u];
+    }
+    subgraph.c_graph->nEdges = subgraph.c_graph->offsets[n];
+    subgraph.c_graph->nbors = new Escape::VertexIdx[subgraph.c_graph->nEdges];
+    for (size_t u = 0; u < n; ++u) {
+        Escape::EdgeIdx pos = subgraph.c_graph->offsets[u];
+        for_each_kept_neighbor(u, [&](int v_sub_idx) { subgraph.c_graph->nbors[pos++] = v_sub_idx; });
     }
 
-    subgraph.c_graph->nEdges = nbors_flat.size();
-    subgraph.c_graph->nbors = new Escape::VertexIdx[subgraph.c_graph->nEdges];
-    std::copy(nbors_flat.begin(), nbors_flat.end(), subgraph.c_graph->nbors);
-    
     return subgraph;
 }
