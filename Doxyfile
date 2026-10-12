@@ -23,3 +23,7 @@ MARKDOWN_SUPPORT       = YES
 GENERATE_LATEX         = NO
 QUIET                  = YES
 WARN_IF_UNDOCUMENTED   = NO
+
+# Include and collaboration graphs, drawn with Graphviz (the `dot` program must be installed).
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
