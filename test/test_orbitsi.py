@@ -7,7 +7,6 @@ from subprocess import Popen, PIPE
 
 def execute_binary(binary_path, data_graph, query_graph):
     """Executes the orbitsi binary with the given graphs and graphlet size."""
-    # Read graphlet size from environment variable, defaulting to '4'
     graphlet_size = os.environ.get('GRAPHLET_SIZE', '4')
     iterate_val = os.environ.get('ITERATE', None)
     iterate_flag = f' --iterate {iterate_val}' if iterate_val is not None else ''
@@ -15,9 +14,19 @@ def execute_binary(binary_path, data_graph, query_graph):
     full_graph_flag = ' --use-full-graph' if use_full_graph == '1' else ''
     cbj = os.environ.get('CBJ', '0')
     cbj_flag = ' --cbj' if cbj == '1' else ''
+    count_only = os.environ.get('COUNT_ONLY', '0')
+    count_only_flag = ' --count-only' if count_only == '1' else ''
+    arc_consistency = os.environ.get('ARC_CONSISTENCY', '1')
+    arc_consistency_flag = ' --no-arc-consistency' if arc_consistency == '0' else ''
+    order_mode = os.environ.get('ORDER_MODE', None)
+    order_mode_flag = f' --order-mode {order_mode}' if order_mode else ''
+
+    extra_flags = os.environ.get('EXTRA_FLAGS', '')
+    extra_flag = f' {extra_flags}' if extra_flags else ''
 
     command = (f'{binary_path} --data {data_graph} --pattern {query_graph} '
-               f'--graphlet-size {graphlet_size}{iterate_flag}{full_graph_flag}{cbj_flag}')
+               f'--graphlet-size {graphlet_size}{iterate_flag}{full_graph_flag}{cbj_flag}{count_only_flag}'
+               f'{arc_consistency_flag}{order_mode_flag}{extra_flag}')
                
     process = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
     std_output, std_error = process.communicate()
@@ -39,7 +48,7 @@ def project_root():
 @pytest.fixture(scope="session")
 def binary_path(project_root):
     """Path to compiled orbitsi binary."""
-    path = os.path.join(project_root, "build", "orbitsi")
+    path = os.environ.get('ORBITSI_BIN') or os.path.join(project_root, "build", "orbitsi")
     if not os.path.isfile(path):
         pytest.skip(f"Binary not found at '{path}' — build it first.")
     return path

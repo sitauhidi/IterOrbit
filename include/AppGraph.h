@@ -9,9 +9,9 @@
 class AppGraph {
 public:
     Escape::CGraph* c_graph = nullptr;
-    std::vector<int> original_node_ids;     // sorted; position = internal index
-    std::vector<int> fast_node_to_idx;      // node ID -> internal index, -1 if absent
-    std::vector<int> fast_labels;           // node ID -> label, -1 if absent
+    std::vector<int> original_node_ids;
+    std::vector<int> fast_node_to_idx;
+    std::vector<int> fast_labels;
 
     AppGraph() = default;
     ~AppGraph();
@@ -33,14 +33,12 @@ public:
     }
 
     bool readFromFile(const std::string& filepath);
-    // Build from an in-memory graph whose vertex IDs are 0..vertex_labels.size()-1
-    // (each undirected edge listed once), e.g. one another tool has already loaded.
     bool buildFromLabelsAndEdges(const std::vector<int>& vertex_labels,
                                  const std::vector<std::pair<int, int>>& edges);
     int degree(int node_id) const;
     bool hasEdge(int u, int v) const;
     std::vector<int> getNeighbors(int node_id) const;
-    
+
     static AppGraph createSubgraph(const AppGraph& original, const std::unordered_set<int>& node_subset);
 
 private:
