@@ -18,7 +18,7 @@
 #include "Symmetry.h"
 
 void print_usage() {
-    std::cerr << "Usage: ./build/orbitsi --data <path> --pattern <path> [options]\n\n"
+    std::cerr << "Usage: ./build/iterorbit --data <path> --pattern <path> [options]\n\n"
               << "Options:\n"
               << "  --graphlet-size <3|4|5>  Set the graphlet size for orbit counting (default: 4)\n"
               << "  --iterate <N>            Set max filter iterations (0 = until convergence, default: 1)\n"

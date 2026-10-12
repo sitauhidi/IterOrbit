@@ -1,7 +1,7 @@
-# Doxygen configuration for OrbitEX (IterOrbit). Run `doxygen` in this directory; the HTML
+# Doxygen configuration for IterOrbit. Run `doxygen` in this directory; the HTML
 # documentation is written to docs/html/index.html.
 
-PROJECT_NAME           = "OrbitEX (IterOrbit)"
+PROJECT_NAME           = "IterOrbit"
 PROJECT_BRIEF          = "Subgraph isomorphism with iterative graphlet-orbit filtering"
 OUTPUT_DIRECTORY       = docs
 

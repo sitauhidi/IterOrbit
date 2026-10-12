@@ -6,7 +6,7 @@ from subprocess import Popen, PIPE
 
 
 def execute_binary(binary_path, data_graph, query_graph):
-    """Executes the orbitsi binary with the given graphs and graphlet size."""
+    """Executes the iterorbit binary with the given graphs and graphlet size."""
     # The configuration under test comes from environment variables; unset ones leave the
     # binary's defaults.
     graphlet_size = os.environ.get('GRAPHLET_SIZE', '4')
@@ -36,7 +36,7 @@ def execute_binary(binary_path, data_graph, query_graph):
 
 
 def parse_output(output):
-    """Parses the output of the orbitsi binary to find the number of matches."""
+    """Parses the output of the iterorbit binary to find the number of matches."""
     match = re.search(r"Matches found: (\d+)", output)
     return int(match.group(1)) if match else -1
 
@@ -49,8 +49,8 @@ def project_root():
 
 @pytest.fixture(scope="session")
 def binary_path(project_root):
-    """Path to compiled orbitsi binary."""
-    path = os.environ.get('ORBITSI_BIN') or os.path.join(project_root, "build", "orbitsi")
+    """Path to compiled iterorbit binary."""
+    path = os.environ.get('ORBITSI_BIN') or os.path.join(project_root, "build", "iterorbit")
     if not os.path.isfile(path):
         pytest.skip(f"Binary not found at '{path}' — build it first.")
     return path
@@ -96,7 +96,7 @@ def query_graphs(project_root):
     glob.glob(os.path.join(os.path.dirname(__file__), "query_graph", "*.graph")),
 )
 def test_query_correctness(binary_path, data_graph_path, query_path, expected_results):
-    """Run the orbitsi binary for each query graph and verify match counts."""
+    """Run the iterorbit binary for each query graph and verify match counts."""
     query_name = os.path.splitext(os.path.basename(query_path))[0]
 
     if query_name not in expected_results:

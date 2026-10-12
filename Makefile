@@ -1,4 +1,4 @@
-# Builds build/orbitsi from src/ and the Escape orbit-counting library in extern/Escape.
+# Builds build/iterorbit from src/ and the Escape orbit-counting library in extern/Escape.
 #   make                      build
 #   make BUILD_DIR=<dir>      build into another directory
 #   make GCC_DIR=<dir>        use another GCC installation (C++17, OpenMP)
@@ -22,7 +22,7 @@ BASE_CXXFLAGS = -std=c++17 -O3 -g -gdwarf-4 -fopenmp -march=native -flto=auto
 APP_CXXFLAGS = $(BASE_CXXFLAGS) -Wall
 
 
-EXECUTABLE = orbitsi
+EXECUTABLE = iterorbit
 
 BUILD_DIR = build
 

@@ -1,12 +1,12 @@
-# OrbitEX (IterOrbit)
+# IterOrbit
 
-OrbitEX is the implementation of **IterOrbit**, a subgraph isomorphism engine: given a small
+**IterOrbit** is a subgraph isomorphism engine: given a small
 *pattern* graph and a large *data* graph, both vertex-labelled and undirected, it finds or counts
 the embeddings of the pattern in the data graph. It extends OrbitSI's graphlet-orbit filter by
 iterating it: the candidates that survive a round induce a smaller data graph, and the filters
 are evaluated again on that graph, until nothing more is removed.
 
-The executable is called `orbitsi`.
+The executable is called `iterorbit`.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ The orbit-counting library Escape/EVOKE is included in `extern/Escape`.
 ## Building
 
 ```bash
-make                      # -> build/orbitsi
+make                      # -> build/iterorbit
 make GCC_DIR=/path/to/gcc # use another GCC installation (the default path is site-specific)
 make BUILD_DIR=out        # build into another directory
 ```
@@ -42,7 +42,7 @@ Vertex IDs are `0 .. n-1`.
 ## Usage
 
 ```bash
-./build/orbitsi --data <data graph> --pattern <pattern graph> [options]
+./build/iterorbit --data <data graph> --pattern <pattern graph> [options]
 ```
 
 Typical runs:
@@ -50,21 +50,21 @@ Typical runs:
 ```bash
 # Count the embeddings, iterating the filter to a fixpoint (the configuration of the paper's
 # end-to-end runs)
-./build/orbitsi --data test/data_graph/HPRD.graph \
+./build/iterorbit --data test/data_graph/HPRD.graph \
                 --pattern test/query_graph/query_dense_16_104.graph --iterate 0 --count-only
 
 # List every embedding, with a single filtering round
-./build/orbitsi --data test/data_graph/HPRD.graph \
+./build/iterorbit --data test/data_graph/HPRD.graph \
                 --pattern test/query_graph/query_dense_16_104.graph --verbose
 
 # Filtering only: candidate statistics and timings per stage and round
-./build/orbitsi --data test/data_graph/HPRD.graph \
+./build/iterorbit --data test/data_graph/HPRD.graph \
                 --pattern test/query_graph/query_dense_16_104.graph --iterate 0 --filter-only
 ```
 
 ### Options
 
-`./build/orbitsi` without arguments prints this list.
+`./build/iterorbit` without arguments prints this list.
 
 Filtering:
 
@@ -152,7 +152,7 @@ GRAPHLET_SIZE=5 ITERATE=0 CBJ=1 COUNT_ONLY=1 pytest test/test_orbitsi.py
 The configuration is set through environment variables: `GRAPHLET_SIZE`, `ITERATE`,
 `USE_FULL_GRAPH`, `CBJ`, `COUNT_ONLY`, `ARC_CONSISTENCY` (`0` for `--no-arc-consistency`),
 `ORDER_MODE`, `EXTRA_FLAGS` (any other options) and `ORBITSI_BIN` (the binary to test, default
-`build/orbitsi`).
+`build/iterorbit`).
 
 `test/orbit_equivalence.cpp` checks the reimplemented orbit-counting routines against Escape's
 originals on subgraphs of a given graph; its header comment gives the build line and usage.
