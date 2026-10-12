@@ -1,3 +1,4 @@
 build/*
 test/__pycache__/
 build_login/*
+docs/

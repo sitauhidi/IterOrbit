@@ -1,3 +1,7 @@
+/// @file
+/// Symmetry-breaking constraints for counting: the pattern's automorphism orbits by
+/// individualisation-refinement, turned into Grochow-Kellis ordering constraints. See Symmetry.h.
+
 #include "Symmetry.h"
 #include <algorithm>
 #include <map>
@@ -5,6 +9,10 @@
 
 namespace {
 
+// Colour refinement (1-dimensional Weisfeiler-Leman) of two colourings of the same graph at once,
+// with one shared renaming of the signatures, so equal colours mean the same thing on both sides.
+// Colours are always 0..k-1. Returns false when the two sides' colour histograms differ (no
+// automorphism can map one colouring to the other) or when the work budget is exhausted.
 class Refiner {
 public:
     Refiner(const std::vector<std::vector<int>>& adj, long long budget) : adj(adj), budget(budget) {
@@ -56,6 +64,9 @@ bool hasEdge(const std::vector<std::vector<int>>& adj, int a, int b) {
     return std::binary_search(adj[a].begin(), adj[a].end(), b);
 }
 
+// An automorphism mapping colouring c1 onto c2 (both equitable-refinable), by individualisation-
+// refinement: refine, and if not yet discrete, individualise one vertex of the smallest
+// non-singleton cell on the left against each vertex of that cell on the right.
 bool findIsomorphism(Refiner& r, const std::vector<int>& labels, std::vector<int> c1,
                      std::vector<int> c2, std::vector<int>& sigma) {
     if (!r.refine(c1, c2)) return false;
@@ -96,7 +107,7 @@ int find(std::vector<int>& parent, int x) {
     return x;
 }
 
-}
+}  // namespace
 
 SymmetryBreaking computeSymmetryBreaking(const AppGraph& pattern, const OrbitCounts& orbits,
                                          const std::vector<int>& order, long long budget) {
@@ -115,6 +126,7 @@ SymmetryBreaking computeSymmetryBreaking(const AppGraph& pattern, const OrbitCou
         std::sort(adj[i].begin(), adj[i].end());
     }
 
+    // Initial colours: (label, graphlet orbit-count vector) -- both preserved by automorphisms.
     std::vector<int> idx(n);
     std::iota(idx.begin(), idx.end(), 0);
     auto key_less = [&](int a, int b) {
@@ -139,11 +151,13 @@ SymmetryBreaking computeSymmetryBreaking(const AppGraph& pattern, const OrbitCou
     for (int x_id : order) {
         const int x = pattern.get_node_idx(x_id);
         const int k = Refiner::numClasses(colour);
-        if (static_cast<size_t>(k) == n) break;
+        if (static_cast<size_t>(k) == n) break;   // discrete: only the identity fixes the vertices so far
 
         std::iota(parent.begin(), parent.end(), 0);
         for (size_t w = 0; w < n; ++w) {
             if (static_cast<int>(w) == x || colour[w] != colour[x] || find(parent, w) == find(parent, x)) continue;
+            // Twins (same label, same neighbours apart from each other): swapping them is an
+            // automorphism fixing everything else.
             std::vector<int> nx, nw;
             for (int y : adj[x]) if (y != static_cast<int>(w)) nx.push_back(y);
             for (int y : adj[w]) if (y != x) nw.push_back(y);
@@ -162,7 +176,7 @@ SymmetryBreaking computeSymmetryBreaking(const AppGraph& pattern, const OrbitCou
             } else if (refiner.out_of_budget) {
                 result.truncated = true;
                 result.work = refiner.work;
-                return result;
+                return result;   // this level's orbit is unknown: keep only the levels before it
             }
         }
 
@@ -178,7 +192,7 @@ SymmetryBreaking computeSymmetryBreaking(const AppGraph& pattern, const OrbitCou
             for (int w : orbit) result.smaller_than[w].push_back(x);
         }
 
-        colour[x] = k;
+        colour[x] = k;   // fix x for the levels after it
         if (!refineOne(colour)) { result.truncated = refiner.out_of_budget; break; }
     }
     result.work = refiner.work;

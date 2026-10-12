@@ -7,6 +7,8 @@ from subprocess import Popen, PIPE
 
 def execute_binary(binary_path, data_graph, query_graph):
     """Executes the orbitsi binary with the given graphs and graphlet size."""
+    # The configuration under test comes from environment variables; unset ones leave the
+    # binary's defaults.
     graphlet_size = os.environ.get('GRAPHLET_SIZE', '4')
     iterate_val = os.environ.get('ITERATE', None)
     iterate_flag = f' --iterate {iterate_val}' if iterate_val is not None else ''
@@ -16,12 +18,12 @@ def execute_binary(binary_path, data_graph, query_graph):
     cbj_flag = ' --cbj' if cbj == '1' else ''
     count_only = os.environ.get('COUNT_ONLY', '0')
     count_only_flag = ' --count-only' if count_only == '1' else ''
-    arc_consistency = os.environ.get('ARC_CONSISTENCY', '1')
+    arc_consistency = os.environ.get('ARC_CONSISTENCY', '1')   # the binary's default
     arc_consistency_flag = ' --no-arc-consistency' if arc_consistency == '0' else ''
-    order_mode = os.environ.get('ORDER_MODE', None)
+    order_mode = os.environ.get('ORDER_MODE', None)   # unset = the binary's default
     order_mode_flag = f' --order-mode {order_mode}' if order_mode else ''
 
-    extra_flags = os.environ.get('EXTRA_FLAGS', '')
+    extra_flags = os.environ.get('EXTRA_FLAGS', '')   # e.g. '--no-symmetry --no-edge-orbit-filter'
     extra_flag = f' {extra_flags}' if extra_flags else ''
 
     command = (f'{binary_path} --data {data_graph} --pattern {query_graph} '

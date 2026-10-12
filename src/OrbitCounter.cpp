@@ -1,3 +1,10 @@
+/// @file
+/// Graphlet orbit counting on top of the Escape/EVOKE library (extern/Escape). The routines in
+/// the anonymous namespace are reimplementations of Escape routines that return the same counts
+/// with less work, mostly by replacing binary searches for edges with marking; each one's comment
+/// names the Escape routine it replaces and what differs. test/orbit_equivalence.cpp checks them
+/// against the originals. See OrbitCounter.h.
+
 #include "OrbitCounter.h"
 #include <algorithm>
 #include <chrono>
@@ -22,6 +29,15 @@ double msSince(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
+// Same per-vertex 4-clique counts (orbit 14) as Escape's fourCliqueOrbitCounterNodeOnly, which
+// binary-searches every pair of out-neighbours. Here each clique i<j<k<l (degree order) is
+// found by marking: T = N+(i) ∩ N+(j) by scanning N+(j) against marks of N+(i), then every
+// l in N+(k) marked in T.
+// cap (by vertex, may be null): a vertex still needs cliques while its count is below its cap.
+// A clique is enumerated from its two lowest vertices (i, j) with the rest in T, so a (i, j)
+// where none of i, j, T still needs any is skipped. Counts only ever grow by real cliques, so a
+// vertex ends either with its exact count or with a count >= its cap -- either way every
+// "count >= requirement" test (requirement <= cap) comes out as with the exact count.
 void fourCliqueOrbitsByMarking(const CGraph* gout, double* clique_counts, const std::vector<double>* cap) {
     auto need = [&](VertexIdx x) { return !cap || clique_counts[x] < (*cap)[x]; };
     const VertexIdx n = gout->nVertices;
@@ -67,6 +83,11 @@ void fourCliqueOrbitsByMarking(const CGraph* gout, double* clique_counts, const 
     }
 }
 
+// Same per-vertex 5-clique counts (orbit 72) as Escape's FiveCliqueOrbitCounter, which tests
+// each pair of 4-clique ends with a linear scan (isEdge). Each clique i<j<k<l<o (degree order)
+// is found once by marking: T1 = N+(i) ∩ N+(j), T2 = N+(k) ∩ T1, then o in N+(l) ∩ T2.
+// cap as in fourCliqueOrbitsByMarking: a branch whose possible members all reached their cap
+// is skipped; every vertex ends with its exact count or a count >= its cap.
 void fiveCliqueOrbitsByMarking(const CGraph* gout, double* clique_counts, const std::vector<double>* cap) {
     auto need = [&](VertexIdx x) { return !cap || clique_counts[x] < (*cap)[x]; };
     const VertexIdx n = gout->nVertices;
@@ -130,6 +151,11 @@ void fiveCliqueOrbitsByMarking(const CGraph* gout, double* clique_counts, const 
     }
 }
 
+// Same outputs as Escape's get_all_three_orbits (orbits 0-3, plus the per-edge values its
+// three_edge_orbit_counter writes: per_edge_[0], per_edge_rev_[0], per_edge_[1]), which
+// enumerates every triangle twice with a binary search per out-neighbour pair. Here each
+// triangle i<j<k (degree order) is found once: mark N+(i) with edge positions, then every
+// marked k in N+(j). Triangle enumeration is skipped when count_triangles is false.
 void threeVertexOrbitsByMarking(const CGraph* cg, const CGraph* gout, OrbitInfo& oc, bool count_triangles) {
     const VertexIdx n = cg->nVertices;
     for (VertexIdx i = 0; i < n; ++i) {
@@ -174,6 +200,11 @@ void threeVertexOrbitsByMarking(const CGraph* cg, const CGraph* gout, OrbitInfo&
     }
 }
 
+// Same orbits 9, 10, 12, 13 as Escape's otherFourPatternOrbitCounterNodeOnly, which found the
+// out-edge position of every in-edge by binary search and re-enumerated triangles with a
+// binary search per out-neighbour pair. Its in-edge loop is folded into the out-edge loop
+// (every in-edge j->i is an out-edge of j, credited to its head), and triangles come from
+// marking. Needs orbits 0 and 3 and the per-edge triangle counts per_edge_[1].
 void pawDiamondOrbits(const CGraph* gout, OrbitInfo& oc) {
     const VertexIdx n = gout->nVertices;
     const double* deg = oc.per_vertex_[0];
@@ -217,6 +248,10 @@ void pawDiamondOrbits(const CGraph* gout, OrbitInfo& oc) {
     }
 }
 
+// Same orbit-8 counts as Escape's four_cycle_orbit_counter_node_only, minus two of its
+// costs: it binary-searched two edge positions per wedge that were never used, and its
+// third pass re-walked every wedge although only the first visit to each end k adds
+// anything (later ones add choosec(0,2)); here the distinct ends are recorded in pass one.
 void fourCycleOrbits(const CGraph* gout, const CGraph* gin, double* cycle_counts) {
     const VertexIdx n = gout->nVertices;
     std::vector<VertexIdx> wedge_count(n, 0);
@@ -255,6 +290,11 @@ void fourCycleOrbits(const CGraph* gout, const CGraph* gin, double* cycle_counts
     }
 }
 
+// Calls f(i, j, k, l, ij, ik, il, jk, jl, kl) once per 4-clique i < j < k < l (degree order),
+// with the gout positions of its six edges -- the cliques, in the order, that Escape's
+// fourCliqueOrbitCounter and Pattern66OrbitCounter find by binary-searching every pair of
+// triangle ends. Here: mark N+(i) with positions; T = the marked k in N+(j); then every l in
+// N+(k) that is in T.
 template <typename F>
 void forEachFourClique(const CGraph* gout, F&& f) {
     const VertexIdx n = gout->nVertices;
@@ -289,6 +329,7 @@ void forEachFourClique(const CGraph* gout, F&& f) {
     }
 }
 
+// Same orbit 14 and per-edge 4-clique counts (per_edge_[11]) as Escape's fourCliqueOrbitCounter.
 void fourCliqueOrbitsWithEdges(const CGraph* gout, OrbitInfo& oc) {
     double* v14 = oc.per_vertex_[14];
     double* e11 = oc.per_edge_[11];
@@ -299,6 +340,8 @@ void fourCliqueOrbitsWithEdges(const CGraph* gout, OrbitInfo& oc) {
     });
 }
 
+// Same orbit-66 counts as Escape's Pattern66OrbitCounter: per 4-clique, each vertex gets
+// per_edge_[1] - 2 of the three clique edges not at it.
 void pattern66Orbits(const CGraph* gout, OrbitInfo& oc) {
     double* v66 = oc.per_vertex_[66];
     const double* e1 = oc.per_edge_[1];
@@ -311,6 +354,8 @@ void pattern66Orbits(const CGraph* gout, OrbitInfo& oc) {
     });
 }
 
+// Appends a ∩ b (both ascending) to out, galloping through the longer list when the lengths
+// are far apart.
 void intersectSortedInto(const VertexIdx* a, EdgeIdx na, const VertexIdx* b, EdgeIdx nb,
                          std::vector<VertexIdx>& out) {
     if (na > nb) { std::swap(a, b); std::swap(na, nb); }
@@ -333,6 +378,15 @@ void intersectSortedInto(const VertexIdx* a, EdgeIdx na, const VertexIdx* b, Edg
     }
 }
 
+// Escape's storeAllTriangles lists, built without binary searches, plus the edge positions the
+// 5-vertex routines would otherwise binary-search for. Positions are into cg (sorted by ID, and
+// ID order is the DAG's degree order, so cg[x] is gin[x] followed by gout[x]); an edge {x, y},
+// x < y, is "canonical" at x's copy, as in Escape.
+//   canon[p]:           canonical position of the edge at position p.
+//   offsets[e]:         for canonical e = {x, y}, third[offsets[e]..offsets[e+1]) are the common
+//                       neighbours of x and y, ascending (Escape's triangle list for e); empty
+//                       for non-canonical positions.
+//   low_edge/high_edge: for the entry c on {x, y}, the canonical positions of {x, c} and {y, c}.
 struct EdgeTriangles {
     std::vector<EdgeIdx> canon;
     std::vector<EdgeIdx> offsets;
@@ -345,6 +399,7 @@ EdgeTriangles buildEdgeTriangles(const CGraph* cg, const CGraph* gout, const CGr
     EdgeTriangles et;
     et.canon.resize(cg->nEdges);
     {
+        // A vertex's lower neighbours come first in its list, in the order this loop meets them.
         std::vector<EdgeIdx> cursor(cg->offsets, cg->offsets + n);
         for (VertexIdx x = 0; x < n; ++x) {
             for (EdgeIdx p = cg->offsets[x]; p < cg->offsets[x + 1]; ++p) {
@@ -356,6 +411,8 @@ EdgeTriangles buildEdgeTriangles(const CGraph* cg, const CGraph* gout, const CGr
     auto canon_of = [&](VertexIdx a, EdgeIdx gout_pos) {
         return cg->offsets[a] + (gin->offsets[a + 1] - gin->offsets[a]) + (gout_pos - gout->offsets[a]);
     };
+    // Every triangle a < b < c once, with its three canonical edges. Lowest vertex ascending, then
+    // b, then c: each edge's list is filled in ascending order of its third vertex.
     std::vector<EdgeIdx> pos_in_a(n, -1);
     auto for_each_triangle = [&](auto&& f) {
         for (VertexIdx a = 0; a < n; ++a) {
@@ -394,6 +451,8 @@ EdgeTriangles buildEdgeTriangles(const CGraph* cg, const CGraph* gout, const CGr
     return et;
 }
 
+// For each gin position q (k in gin[j]), the gout position of the same edge (j in gout[k]).
+// gin lists are ascending, so walking the k in ascending order fills each gin[j] in order.
 std::vector<EdgeIdx> ginToGoutPositions(const CGraph* gout, const CGraph* gin) {
     const VertexIdx n = gout->nVertices;
     std::vector<EdgeIdx> gin_to_gout(gin->nEdges);
@@ -404,6 +463,10 @@ std::vector<EdgeIdx> ginToGoutPositions(const CGraph* gout, const CGraph* gin) {
     return gin_to_gout;
 }
 
+// Same orbit-8 and per-edge 4-cycle counts (per_edge_[5]) as Escape's four_cycle_orbit_counter:
+// the same wedges, but the edge positions it binary-searched (j -> i per in-neighbour, k -> j
+// per in-in wedge) come from ginToGoutPositions, the additions per (i, j) are summed, and its
+// third pass visits each distinct wedge end once (later visits added choosec(0, 2)).
 void fourCycleOrbitsWithEdges(const CGraph* gout, const CGraph* gin, OrbitInfo& oc) {
     const VertexIdx n = gout->nVertices;
     double* v8 = oc.per_vertex_[8];
@@ -452,9 +515,15 @@ void fourCycleOrbitsWithEdges(const CGraph* gout, const CGraph* gin, OrbitInfo& 
     }
 }
 
+// Same orbit-34 counts as Escape's FiveCycleOrbitCounter: same wedges, three-paths and
+// corrections, but its four binary searches per three-path (and one per wedge) become lookups:
+// marks of N(i) and N(j), and each gin edge's gout position. Its unused type-1/type-2 wedge
+// arrays are dropped, and the counts it cleared by re-walking every three-path are cleared from
+// a list of the ends touched.
 void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, double* c34) {
     const VertexIdx n = gout->nVertices;
     const std::vector<EdgeIdx> gin_to_gout = ginToGoutPositions(gout, gin);
+    // tri_inin[e] for gout edge e = (j, k): the number of i with i -> j and i -> k.
     std::vector<VertexIdx> tri_inin(gout->nEdges, 0);
     {
         std::vector<char> in_out_i(n, 0);
@@ -472,8 +541,8 @@ void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, do
     }
 
     std::vector<VertexIdx> wedge_count(n, 0), wedge_count_type3(n, 0), three_path_counts(n, 0);
-    std::vector<VertexIdx> nbr_of_i(n, -1);
-    std::vector<EdgeIdx> nbr_of_j(n, -1);
+    std::vector<VertexIdx> nbr_of_i(n, -1);   // == i for neighbours of i
+    std::vector<EdgeIdx> nbr_of_j(n, -1);     // == gin position of (j in gin[i]) for neighbours of j
     std::vector<VertexIdx> wedge_ends, path_ends;
     for (VertexIdx i = 0; i < n; ++i) {
         for (EdgeIdx p = cg->offsets[i]; p < cg->offsets[i + 1]; ++p) nbr_of_i[cg->nbors[p]] = i;
@@ -481,18 +550,18 @@ void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, do
         wedge_ends.clear();
         for (EdgeIdx pos = gin->offsets[i]; pos < gin->offsets[i + 1]; ++pos) {
             const VertexIdx j = gin->nbors[pos];
-            for (EdgeIdx q = gin->offsets[j]; q < gin->offsets[j + 1]; ++q) {
+            for (EdgeIdx q = gin->offsets[j]; q < gin->offsets[j + 1]; ++q) {   // i <- j <- k
                 const VertexIdx k = gin->nbors[q];
                 ++wedge_count_type3[k];
                 if (wedge_count[k]++ == 0) wedge_ends.push_back(k);
             }
-            for (EdgeIdx q = gout->offsets[j]; q < gout->offsets[j + 1]; ++q) {
+            for (EdgeIdx q = gout->offsets[j]; q < gout->offsets[j + 1]; ++q) { // i <- j -> k
                 const VertexIdx k = gout->nbors[q];
                 if (k == i) continue;
                 if (wedge_count[k]++ == 0) wedge_ends.push_back(k);
             }
         }
-        for (EdgeIdx pos = gout->offsets[i]; pos < gout->offsets[i + 1]; ++pos) {
+        for (EdgeIdx pos = gout->offsets[i]; pos < gout->offsets[i + 1]; ++pos) {  // i -> j -> k
             const VertexIdx j = gout->nbors[pos];
             for (EdgeIdx q = gout->offsets[j]; q < gout->offsets[j + 1]; ++q) {
                 const VertexIdx k = gout->nbors[q];
@@ -500,6 +569,7 @@ void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, do
             }
         }
 
+        // Three-paths i <- j <- k -> ell.
         path_ends.clear();
         for (EdgeIdx pos = gin->offsets[i]; pos < gin->offsets[i + 1]; ++pos) {
             const VertexIdx j = gin->nbors[pos];
@@ -525,12 +595,13 @@ void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, do
             c34[j] += sum_ij;
         }
 
+        // The middle node of each wedge, from the three-path counts.
         for (EdgeIdx pos = gin->offsets[i]; pos < gin->offsets[i + 1]; ++pos) {
             const VertexIdx j = gin->nbors[pos];
             VertexIdx add = 0;
-            for (EdgeIdx q = gin->offsets[j]; q < gin->offsets[j + 1]; ++q)
+            for (EdgeIdx q = gin->offsets[j]; q < gin->offsets[j + 1]; ++q)       // i <- j <- k
                 add += three_path_counts[gin->nbors[q]] - tri_inin[gin_to_gout[q]];
-            for (EdgeIdx q = gout->offsets[j]; q < gout->offsets[j + 1]; ++q) {
+            for (EdgeIdx q = gout->offsets[j]; q < gout->offsets[j + 1]; ++q) {   // i <- j -> k
                 const VertexIdx k = gout->nbors[q];
                 if (k == i) continue;
                 const VertexIdx k_to_i = k < i && nbr_of_i[k] == i;
@@ -538,7 +609,7 @@ void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, do
             }
             c34[j] += add;
         }
-        for (EdgeIdx pos = gout->offsets[i]; pos < gout->offsets[i + 1]; ++pos) {
+        for (EdgeIdx pos = gout->offsets[i]; pos < gout->offsets[i + 1]; ++pos) {  // i -> j -> k
             const VertexIdx j = gout->nbors[pos];
             VertexIdx add = 0;
             for (EdgeIdx q = gout->offsets[j]; q < gout->offsets[j + 1]; ++q) add += three_path_counts[gout->nbors[q]];
@@ -550,6 +621,16 @@ void fiveCycleOrbits(const CGraph* cg, const CGraph* gout, const CGraph* gin, do
     }
 }
 
+// Same orbit 62, 63, 64, 68, 69 counts as Escape's ChordalWedgeColOrbitCounter: the same
+// diamonds (i, j, k, ell), ell > i, via the triangle lists, but
+//  - the position of {j, k} comes from the entry (no binary search), and the ells > i of its
+//    list from one upper_bound; the second pass over the diamonds reuses those ranges;
+//  - Escape counted wedge_count[ell] = |N(i) ∩ N(ell)| by walking every wedge i - j - k (all of
+//    N(j) for every neighbour j; three such passes) but read it only at diamond ends (the ells
+//    with a j < k diamond, "ends" below). Here, per i, whichever is cheaper: one pass over the
+//    wedges with k > i (also doing orbit 62's pass), or intersecting N(i) with N(ell) per end;
+//  - the per-diamond additions to 63, 64 and the mid counts are summed per end and per range;
+//  - parts whose orbits no pattern vertex has are skipped (do62, do6364, do6869).
 void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc,
                         bool do62, bool do6364, bool do6869) {
     const VertexIdx n = cg->nVertices;
@@ -563,14 +644,14 @@ void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc
 
     std::vector<VertexIdx> diamond_count(n, 0), diamond_count_final(n, 0), diamond_count_i(n, 0),
         mid_diamond_count_i(n, 0);
-    std::vector<VertexIdx> end_stamp(n, -1);
-    std::vector<VertexIdx> wedge_stamp(n, -1);
+    std::vector<VertexIdx> end_stamp(n, -1);     // == i for the ends of i
+    std::vector<VertexIdx> wedge_stamp(n, -1);   // == i once wedge_count[] is for i
     std::vector<VertexIdx> wedge_count(n, 0);
     std::vector<VertexIdx> ends;
-    std::vector<EdgeIdx> above_i;
+    std::vector<EdgeIdx> above_i;                // per neighbour j: first position in N(j) past i
     std::vector<std::pair<EdgeIdx, EdgeIdx>> ranges;
     struct MidRange { VertexIdx j, k; EdgeIdx begin, end; };
-    std::vector<MidRange> mid_ranges;
+    std::vector<MidRange> mid_ranges;            // the j < k diamonds of i, for orbit 64
 
     for (VertexIdx i = 0; i < n; ++i) {
         const VertexIdx* n_i = cg->nbors + cg->offsets[i];
@@ -606,6 +687,8 @@ void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc
             }
             mid_diamond_count_i[j] += mid_j;
             if (!do6869) continue;
+            // Escape's second pass: C(count, 2) at the first visit of each ell (it then zeroes
+            // the count), and count - 1 to k for every (k, ell).
             for (EdgeIdx t = t_begin; t < t_end; ++t) {
                 const auto& range = ranges[t - t_begin];
                 VertexIdx to_k = 0;
@@ -626,6 +709,8 @@ void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc
         }
         if (ends.empty()) continue;
 
+        // wedge_count[ell] for the ends; orbit 62 gets diamond_count_i[k] at j for every wedge
+        // i - j - k with k > i (non-zero only at ends k).
         double wedge_cost = 0, intersect_cost = 0;
         above_i.resize(deg_i);
         for (EdgeIdx p = 0; p < deg_i; ++p) {
@@ -661,6 +746,7 @@ void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc
                 const VertexIdx d = diamond_count_i[ell];
                 VertexIdx common = 0;
                 auto hit = [&](VertexIdx x) { ++common; if (do62) r62[x] += d; };
+                // Galloping through the longer list when the lengths are far apart.
                 const VertexIdx* b = n_ell;
                 const VertexIdx* b_end = ne;
                 if (a_end - a > b_end - b) { std::swap(a, b); std::swap(a_end, b_end); }
@@ -689,7 +775,7 @@ void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc
                 const VertexIdx w = wedge_count[ell] - 2;
                 r63[i] += static_cast<double>(w) * diamond_count_i[ell];
                 r63[ell] += static_cast<double>(w) * diamond_count_i[ell];
-                wedge_count[ell] = w;
+                wedge_count[ell] = w;   // reused below as the per-diamond amount
             }
             for (const MidRange& r : mid_ranges) {
                 VertexIdx sum = 0;
@@ -710,18 +796,23 @@ void chordalWedgeOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc
         }
     }
 
+    // Escape: orbits 68 and 69 are double counted.
     for (VertexIdx i = 0; i < n; ++i) {
         r68[i] /= 2;
         r69[i] /= 2;
     }
 }
 
+// Same orbit 70, 71 counts as Escape's AlmostFiveCliqueOrbitCounter: for each edge i < j and
+// each nbr in T = N(i) ∩ N(j) with i < nbr < j, the x in T adjacent to nbr. Escape rebuilt T with
+// a binary search per neighbour of i and tested each x twice by binary search; here T is the
+// edge's triangle list and {x in T adjacent to nbr} = T ∩ (triangle list of {i, nbr}).
 void almostFiveCliqueOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo& oc) {
     const VertexIdx n = cg->nVertices;
     double* r70 = oc.per_vertex_[70];
     double* r71 = oc.per_vertex_[71];
     const VertexIdx* third = et.third.data();
-    std::vector<EdgeIdx> pos_from_i(n, 0);
+    std::vector<EdgeIdx> pos_from_i(n, 0);   // cg position of {i, v} in i's list, for v > i
     std::vector<VertexIdx> cliques;
     for (VertexIdx i = 0; i < n; ++i) {
         const EdgeIdx i_end = cg->offsets[i + 1];
@@ -767,6 +858,7 @@ OrbitCounts EVOKEOrbitCounter::count() {
     dag.inlist.sortById();
     last_timings.relabel_dag_ms = msSince(t);
 
+    // Caps come indexed by the graph's internal index; the counters run on relabeled IDs.
     auto relabelCap = [&](const std::vector<double>* cap) {
         std::vector<double> relabeled;
         if (cap) {
@@ -791,16 +883,22 @@ OrbitCounts EVOKEOrbitCounter::count() {
     } else {
         throw std::invalid_argument("Only graphlet sizes 3, 4, and 5 are supported.");
     }
-
+    
     OrbitInfo orbit_counts(&(dag.outlist), num_node_orbits, num_edge_orbits);
-
+    
     t = Clock::now();
+    // Triangles feed orbit 3 and everything derived from it (4, 5, 11 via closed forms,
+    // paw/diamond via per-edge counts); with none of those needed they can be skipped.
     const bool count_triangles = needed(3) || (graphlet_size >= 4 && (needed(4) || needed(5) ||
         needed(9) || needed(10) || needed(11) || needed(12) || needed(13))) || graphlet_size == 5;
     threeVertexOrbitsByMarking(&g_relabel, &(dag.outlist), orbit_counts, count_triangles);
     last_timings.three_ms = msSince(t);
 
     if (graphlet_size == 5) {
+        // The bodies of Escape's get_all_four_orbits and get_all_five_orbits (with its parallel
+        // sections), expanded so that each routine and each parallel section can be timed and
+        // skipped; same counts. The 5-cycle, chordal-wedge, almost-5-clique and 5-clique routines
+        // are the reimplementations above.
         CGraph* cg = &g_relabel;
         CGraph* gout = &(dag.outlist);
         CGraph* gin = &(dag.inlist);
@@ -820,6 +918,8 @@ OrbitCounts EVOKEOrbitCounter::count() {
         }
         last_timings.four_closed_ms = msSince(t);
 
+        // Each 5-vertex routine writes only its own vertex orbits (and no edge orbits), and the
+        // parallel ones can't read each other's, so one whose orbits no pattern vertex has is skipped.
         auto any_needed = [&](std::initializer_list<int> orbits) {
             for (int o : orbits) if (needed(o)) return true;
             return false;
@@ -840,6 +940,9 @@ OrbitCounts EVOKEOrbitCounter::count() {
         otherFourPatternOrbitCounter(gout, gin, orbit_counts);
         last_timings.four_other_ms = msSince(t);
 
+        // Of the 5-vertex routines only the other-five one reads the per-edge 4-cycle and
+        // 4-clique counts and orbit 14 (the tree one reads orbit 8). Without it, only the vertex
+        // counts a pattern vertex (or the tree routine) needs are computed, orbit 14 capped.
         t = Clock::now();
         if (run_other) fourCycleOrbitsWithEdges(gout, gin, orbit_counts);
         else if (run_tree || needed(8)) fourCycleOrbits(gout, gin, orbit_counts.per_vertex_[8]);
@@ -854,6 +957,7 @@ OrbitCounts EVOKEOrbitCounter::count() {
         }
         last_timings.four_clique_ms = msSince(t);
 
+        // The per-edge triangle lists are only read by the chordal-wedge and almost-5-clique routines.
         t = Clock::now();
         EdgeTriangles edge_tris;
         if (run_chordal || run_almost) edge_tris = buildEdgeTriangles(cg, gout, gin);
@@ -896,6 +1000,8 @@ OrbitCounts EVOKEOrbitCounter::count() {
         }
         last_timings.five_parallel_ms = msSince(t);
     } else if (graphlet_size == 4) {
+        // Body of Escape's get_all_four_orbits_node_only, expanded so each routine can be
+        // timed separately; same routines, same order, same counts.
         t = Clock::now();
         CGraph* cg = &g_relabel;
         for (VertexIdx i = 0; i < cg->nVertices; i++) {
@@ -912,6 +1018,8 @@ OrbitCounts EVOKEOrbitCounter::count() {
         }
         last_timings.four_closed_ms = msSince(t);
 
+        // Each routine only writes its own orbits (paw/diamond: 9,10,12,13; cycle: 8; clique: 14),
+        // so one whose orbits no pattern vertex has can be skipped: its zeros never reject.
         t = Clock::now();
         if (needed(9) || needed(10) || needed(12) || needed(13)) {
             pawDiamondOrbits(&(dag.outlist), orbit_counts);

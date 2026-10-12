@@ -1,3 +1,6 @@
+/// @file
+/// Matching orders (Section "Ordering Strategy" of the paper). See OrderEngine.h.
+
 #include "OrderEngine.h"
 #include <algorithm>
 #include <unordered_set>
@@ -27,6 +30,8 @@ void OrderEngine::runCore(bool use_orbits) {
         for (int w : pattern_graph.getNeighbors(ids[i])) nbrs[i].push_back(pattern_graph.get_node_idx(w));
     }
 
+    // 2-core: peel degree <= 1 vertices until none is left. Empty for a tree, in which case
+    // every vertex counts as core (nothing to put first).
     std::vector<int> deg(n);
     std::vector<int> peel;
     std::vector<char> in_core(n, 1);
@@ -59,6 +64,7 @@ void OrderEngine::runCore(bool use_orbits) {
         }
     }
 
+    // Start: highest dense-orbit score (use_orbits), then fewest candidates per neighbour.
     auto better_start = [&](int a, int b) {
         if (in_core[a] != in_core[b]) return in_core[a] > in_core[b];
         if (use_orbits && dense[a] != dense[b]) return dense[a] > dense[b];
@@ -85,6 +91,8 @@ void OrderEngine::runCore(bool use_orbits) {
                 if (better_start(c, best)) best = c;
                 continue;
             }
+            // core before trees, then most backward neighbours, then (use_orbits) highest
+            // dense-orbit score, then fewest candidates
             if (in_core[c] != in_core[best]) { if (in_core[c] > in_core[best]) best = c; continue; }
             if (backward[c] != backward[best]) { if (backward[c] > backward[best]) best = c; continue; }
             if (use_orbits && dense[c] != dense[best]) { if (dense[c] > dense[best]) best = c; continue; }
@@ -180,7 +188,7 @@ void OrderEngine::runOrbit() {
                 break;
             }
         }
-
+        
         order.push_back(selected_node);
         visited.insert(selected_node);
     }

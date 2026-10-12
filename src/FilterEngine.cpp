@@ -1,3 +1,7 @@
+/// @file
+/// Iterative orbit filtering: Algorithm 1 (IterOrbitFilter) and the filter operators of
+/// Section "Methodology" of the paper. See FilterEngine.h.
+
 #include "FilterEngine.h"
 #include <unordered_set>
 #include <algorithm>
@@ -27,6 +31,8 @@ FilterEngine::FilterEngine(const AppGraph& data, const AppGraph& pattern, int g_
       post_orbit_induction(post_orbit_induction_)
 {}
 
+// G_d^(t): the subgraph of the data graph induced by the union of the candidate sets. Skipped when
+// no candidate has been removed since the last induction (the same union gives the same graph).
 void FilterEngine::induceCandidateSubgraph() {
     const size_t count = getCandidateCount();
     if (count == subgraph_candidate_count) return;
@@ -51,7 +57,7 @@ bool FilterEngine::run() {
 
     pattern_nlf.clear();
     for (int u : pattern_graph.original_node_ids) {
-        pattern_nlf[u];
+        pattern_nlf[u];  // isolated pattern vertices get an empty (no-requirement) entry too
         for (int nbr : pattern_graph.getNeighbors(u)) {
             pattern_nlf[u][pattern_graph.get_label_fast(nbr)]++;
         }
@@ -62,6 +68,9 @@ bool FilterEngine::run() {
         if (label > max_data_label) max_data_label = label;
     }
 
+    // Round 1's NLF runs on the full data graph, so it is applied in the same pass as LDF.
+    // ldf_only_count is LDF's count alone: round 1 is compared against it, so that a round 1 in
+    // which only NLF removes candidates still counts as having changed something.
     size_t ldf_only_count = 0;
     if (!ldfNlfFilter(ldf_only_count)) {
         countCandidates("After LDF Filter (Failed)");
@@ -77,6 +86,7 @@ bool FilterEngine::run() {
     EVOKEOrbitCounter pattern_counter(pattern_graph, graphlet_size);
     pattern_orbits = pattern_counter.count();
 
+    // An orbit no pattern vertex has can't reject any candidate, so the data graph need not count it.
     needed_orbits.clear();
     for (const auto& orbits_u : pattern_orbits) {
         if (needed_orbits.empty()) needed_orbits.assign(orbits_u.size(), false);
@@ -126,6 +136,8 @@ bool FilterEngine::run() {
             countCandidates("After Semi-Join Filter");
         }
 
+        // Without the orbit stage (ablation) the branch below still induces G_d^(t), so later
+        // rounds' NLF and semi-join run on the contracted graph.
         bool run_orbit_this_round = enable_orbit_filter;
         if (enable_orbit_filter && enable_orbit_throttle && iter > 1) {
             size_t count_before_orbit = getCandidateCount();
@@ -153,6 +165,8 @@ bool FilterEngine::run() {
             }
             countCandidates("After Orbit Filter");
             candidates_at_last_orbit_run = getCandidateCount();
+            // Second induction: the next round's NLF and arc consistency run on the graph the
+            // orbit stage has just contracted, not on the one it counted orbits on.
             if (use_subgraph && post_orbit_induction) induceCandidateSubgraph();
         } else if (use_subgraph) {
             induceCandidateSubgraph();
@@ -188,13 +202,17 @@ bool FilterEngine::run() {
     return true;
 }
 
+// LDF (label, degree) and NLF on the full data graph in one pass over the data vertices in ID
+// order: each data vertex's neighbour labels are counted once (only labels the pattern
+// requires, capped at the largest requirement) and shared by every same-label pattern vertex.
+// Same candidates, in the same order, as LDF followed by nlfFilter(data_graph).
 bool FilterEngine::ldfNlfFilter(size_t& ldf_only_count) {
     struct PatternVertex {
         int u;
         int degree;
-        bool unsatisfiable;
-        std::vector<std::pair<int, int>> needs;
-        std::vector<int>* out = nullptr;
+        bool unsatisfiable;                        // requires a label the data graph lacks
+        std::vector<std::pair<int, int>> needs;    // (label slot, minimum neighbour count)
+        std::vector<int>* out = nullptr;           // candidate_sets[u]
     };
     std::vector<std::vector<PatternVertex>> pattern_by_label(max_data_label + 1);
     std::vector<int> slot_of_label(max_data_label + 1, -1);
@@ -273,6 +291,9 @@ bool FilterEngine::ldfNlfFilter(size_t& ldf_only_count) {
 }
 
 bool FilterEngine::nlfFilter(const AppGraph& neighbor_graph) {
+    // Only labels some pattern vertex requires matter; give each a slot, and count each
+    // candidate's neighbours per slot once per call (shared by every pattern vertex it's a
+    // candidate of), capped at the largest requirement since counts above it never reject.
     std::vector<int> slot_of_label(max_data_label + 1, -1);
     int num_slots = 0;
     int max_requirement = 0;
@@ -347,6 +368,11 @@ bool FilterEngine::nlfFilter(const AppGraph& neighbor_graph) {
     return true;
 }
 
+// Semi-join (edge consistency): v stays in C(u) only if, for every pattern neighbour u' of u, some
+// neighbour of v is in C(u'). By default (arc_consistency) it runs to a fixpoint (AC-3 over
+// pattern vertices): removals update the candidate bits at once, and every pattern neighbour of
+// a pattern vertex whose set shrank is re-checked, until no set changes. Without it
+// (--no-arc-consistency) it is one pass against the candidate sets as they were at its start.
 bool FilterEngine::semiJoinFilter(const AppGraph& neighbor_graph) {
     if (arc_consistency) return arcConsistencyFilter(neighbor_graph);
     int num_words = (neighbor_graph.c_graph && neighbor_graph.c_graph->nVertices > 0)
@@ -419,6 +445,7 @@ bool FilterEngine::arcConsistencyFilter(const AppGraph& neighbor_graph) {
     const Escape::CGraph* g = neighbor_graph.c_graph;
     const size_t num_words = (g && g->nVertices > 0) ? static_cast<size_t>((g->nVertices - 1) / 64) + 1 : 1;
 
+    // Pattern vertices by position, their candidate bits and their pattern neighbours' positions.
     std::vector<int> pattern_ids;
     std::unordered_map<int, int> position;
     for (const auto& pair : candidate_sets) {
@@ -435,6 +462,7 @@ bool FilterEngine::arcConsistencyFilter(const AppGraph& neighbor_graph) {
         }
         for (int u_prime : pattern_graph.getNeighbors(pattern_ids[p])) {
             auto it = position.find(u_prime);
+            // A pattern neighbour without a candidate set supports nothing.
             pattern_nbrs[p].push_back(it == position.end() ? -1 : it->second);
         }
     }
@@ -507,6 +535,9 @@ bool FilterEngine::orbitFilter() {
     auto count_start = Clock::now();
     EVOKEOrbitCounter data_counter(*graph_for_orbit_counting, graphlet_size, &needed_orbits);
 
+    // A vertex's clique count (orbit 14: 4-clique, 72: 5-clique) is only ever compared against
+    // that orbit's count for the pattern vertices it's a candidate of, so counting it past the
+    // largest of those changes nothing.
     std::vector<double> clique_caps[2];
     const int clique_orbits[2] = {14, 72};
     for (int c = 0; c < 2; ++c) {

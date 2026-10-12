@@ -1,3 +1,8 @@
+/// @file
+/// Command-line driver: load the graphs, filter (FilterEngine), order (OrderEngine), compute
+/// symmetry-breaking constraints when counting (Symmetry), search (SearchEngine), and report the
+/// match count and the time of each phase.
+
 #include <iostream>
 #include <vector>
 #include <string>
@@ -23,17 +28,17 @@ void print_usage() {
               << "  --filter-only            Run filtering only; skip ordering and search\n"
               << "  --verbose                Print all found matches to the console\n"
               << "  --orbit-throttle         Skip the per-iteration orbit recount once candidates\n"
-              << "                           have nearly stabilized (opt-in; changes what \"iteration\n"
-              << "                           N\" costs, not what it converges to -- see CLAUDE.md)\n"
+              << "                           have nearly stabilized (opt-in; changes what a round\n"
+              << "                           costs, not the fixpoint it converges to)\n"
               << "  --orbit-throttle-threshold <f>  Min candidate-shrink fraction to keep running the\n"
               << "                                  orbit recount every iteration (default: 0.05)\n"
               << "  --disable-semi-join      Skip the edge-consistency (semi-join) filter stage\n"
               << "                           (enabled by default)\n"
               << "  --no-orbit-filter        Skip the orbit filter stage in every round (ablation);\n"
               << "                           contraction and NLF/semi-join rounds still run\n"
-              << "  --single-induction       Induce G_d^(t) once per round, before the orbit stage\n"
-              << "                           (the earlier behaviour); by default it is induced again\n"
-              << "                           after the orbit stage, for the next round's NLF/semi-join\n"
+              << "  --single-induction       Induce G_d^(t) once per round, before the orbit stage;\n"
+              << "                           by default it is induced again after the orbit stage,\n"
+              << "                           for the next round's NLF/semi-join\n"
               << "  --no-arc-consistency     Run the semi-join as one pass per filter round instead of\n"
               << "                           to a fixpoint (arc consistency, the default)\n"
               << "  --count-only             Count matches without materializing each embedding\n"
@@ -42,7 +47,7 @@ void print_usage() {
               << "  --order <u,u,...>        Search in this matching order (pattern vertex IDs, a\n"
               << "                           permutation) instead of OrderEngine's (diagnostic)\n"
               << "  --order-mode <m>         Matching order: core (default; 2-core first, fewest\n"
-              << "                           candidates), orbit (the original), core-orbit (core,\n"
+              << "                           candidates), orbit (by orbit strength), core-orbit (core,\n"
               << "                           dense-orbit score before candidates) -- see OrderEngine.h\n"
               << "  --search-stats           Print per-depth search-tree node and local-candidate counts\n"
               << "  --no-edge-orbit-filter   Keep candidate-space index entries whose data edge lies in\n"
@@ -136,7 +141,7 @@ int main(int argc, char* argv[]) {
         } else if (args[i] == "--disable-semi-join") {
             enable_semi_join = false;
         } else if (args[i] == "--arc-consistency") {
-            arc_consistency = true;
+            arc_consistency = true;   // already the default: the flag is accepted and changes nothing
         } else if (args[i] == "--no-arc-consistency") {
             arc_consistency = false;
         } else if (args[i] == "--no-orbit-filter") {
@@ -230,6 +235,8 @@ int main(int argc, char* argv[]) {
     const bool filter_ok = filter_engine.run();
 
     auto filter_end = std::chrono::high_resolution_clock::now();
+    // Fractional ms, printed fixed-point so large values never switch to exponent notation.
+    // Also printed when filtering refutes the instance, so a refuted run's cost is known too.
     std::chrono::duration<double, std::milli> filter_elapsed = filter_end - start;
     print_ms("\nTotal filtering time: ", filter_elapsed.count());
     if (!filter_ok) {
@@ -271,6 +278,7 @@ int main(int argc, char* argv[]) {
         std::cout << std::endl;
     }
 
+    // Symmetry breaking only applies when counting: listing matches needs every one of them.
     SymmetryBreaking symmetry;
     const bool use_symmetry = symmetry_breaking && count_only;
     if (use_symmetry) {

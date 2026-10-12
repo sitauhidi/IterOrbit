@@ -1,0 +1,25 @@
+# Doxygen configuration for OrbitEX (IterOrbit). Run `doxygen` in this directory; the HTML
+# documentation is written to docs/html/index.html.
+
+PROJECT_NAME           = "OrbitEX (IterOrbit)"
+PROJECT_BRIEF          = "Subgraph isomorphism with iterative graphlet-orbit filtering"
+OUTPUT_DIRECTORY       = docs
+
+# The README is the main page; the interfaces are documented in include/, and each file in src/
+# has a summary. extern/Escape is third-party code and is left out.
+INPUT                  = README.md include src
+FILE_PATTERNS          = *.h *.cpp *.md
+USE_MDFILE_AS_MAINPAGE = README.md
+RECURSIVE              = NO
+
+# Much of the documentation is on private members and file-local routines.
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_ANON_NSPACES   = YES
+
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+GENERATE_LATEX         = NO
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO

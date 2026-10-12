@@ -1,3 +1,8 @@
+/// @file
+/// Enumeration (Section "Enumeration" of the paper): the candidate-space index, the edge-orbit
+/// index filter, backtracking with optional conflict-directed backjumping, symmetry-broken
+/// counting, and counting the last level without visiting it. See SearchEngine.h.
+
 #include "SearchEngine.h"
 #include <algorithm>
 #include <cmath>
@@ -10,6 +15,8 @@
 namespace {
 
 #ifdef __AVX2__
+// kCompress.idx[m]: the lanes set in the 8-bit mask m, in order, then zeros -- the permutation
+// that packs an AVX2 vector's selected lanes to its front.
 struct CompressTable {
     alignas(32) int idx[256][8];
     CompressTable() {
@@ -24,6 +31,10 @@ struct CompressTable {
 };
 const CompressTable kCompress;
 
+// Block-wise merge, 8 x 8 elements per step: each a-block is compared with every rotation of the
+// b-block, its matching elements packed to out, and the block with the smaller maximum
+// advances (both on a tie). Sorted, duplicate-free inputs give the same sorted output as a
+// scalar merge. Writes up to 8 elements past the result, so out needs that much slack.
 size_t intersectMergeAVX2(const int* a, size_t na, const int* b, size_t nb, int* out) {
     size_t i = 0, j = 0, count = 0;
     const size_t na8 = na & ~size_t{7}, nb8 = nb & ~size_t{7};
@@ -101,6 +112,10 @@ size_t intersectSorted(const int* a, size_t na, const int* b, size_t nb, int* ou
 
 }
 
+// Per adjacency position p = (x -> y) of g: the triangles containing the edge {x, y}. Each
+// triangle is found once from its lowest-ranked vertex (rank = degree, then index), credited to
+// its three edges at the positions met, then copied to the reverse positions. About
+// sum over edges of min(deg) work: the right choice when most edges are needed.
 static std::vector<int64_t> edgeTriangles(const Escape::CGraph* g) {
     const int64_t n = g->nVertices;
     const Escape::EdgeIdx* off = g->offsets;
@@ -136,6 +151,9 @@ static std::vector<int64_t> edgeTriangles(const Escape::CGraph* g) {
     return tri;
 }
 
+// |N(x) & N(y)| in g (the triangles on edge {x, y}), galloping through the longer list when the
+// lengths are far apart; and the cost estimate the index filter uses to choose between this and
+// edgeTriangles.
 static int64_t commonNeighbours(const Escape::CGraph* g, int64_t x, int64_t y) {
     const Escape::VertexIdx* a = g->nbors + g->offsets[x];
     const Escape::VertexIdx* a_end = g->nbors + g->offsets[x + 1];
@@ -200,16 +218,27 @@ SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
         }
     }
 
+    // Edge-orbit filter: an index entry (v', v) along pattern edge {u', u} survives only if the
+    // data edge {v', v} lies in at least as many triangles as {u', u} does. An embedding maps
+    // each triangle through {u', u} to a distinct one through its image, inside any induced
+    // subgraph containing the embedding's image -- such as the candidate subgraph searched here
+    // -- so no entry an embedding uses is removed (non-induced counts: sound for induced search
+    // too). The data counts come either from one pass over the whole subgraph (edgeTriangles) or
+    // per entry by intersecting neighbour lists. Per entry is used while it costs at most ~4x
+    // the adjacency scan that built that pattern edge's entries; beyond that the whole-graph
+    // pass, computed once for all pattern edges, if it costs at most ~4x the scan for the whole
+    // index; otherwise the entries stay unfiltered (always safe). This caps the overhead on easy
+    // searches.
     std::vector<int64_t> pattern_tri;
     if (edge_orbit_filter && pattern_graph.c_graph && data_graph.c_graph) {
         pattern_tri = edgeTriangles(pattern_graph.c_graph);
         if (std::none_of(pattern_tri.begin(), pattern_tri.end(), [](int64_t t) { return t > 0; })) pattern_tri.clear();
     }
     const Escape::CGraph* dg = data_graph.c_graph;
-    std::vector<int64_t> data_tri;
+    std::vector<int64_t> data_tri;          // whole-graph counts, once computed
     double whole_graph_cost = -1;
     auto dataDeg = [&](int64_t v) { return dg->offsets[v + 1] - dg->offsets[v]; };
-    double index_scan_work = 0;
+    double index_scan_work = 0;   // adjacency positions the whole index build scans
     if (!pattern_tri.empty()) {
         std::vector<double> scan_of(num_p_nodes, 0);
         for (size_t x = 0; x < num_p_nodes; ++x) {
@@ -271,6 +300,7 @@ SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
 
             const int64_t need_t = pattern_tri.empty() ? 0 : pattern_tri[patternEdgePos(from_u, u)];
             if (need_t > 0 && !edge.targets.empty()) {
+                // Same walk as above, so the t-th entry is met at the same position k.
                 bool per_entry = data_tri.empty();
                 bool apply = true;
                 if (per_entry) {
@@ -285,6 +315,8 @@ SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
                     }
                     const double whole_budget = 4 * index_scan_work + 1000;
                     if (cost > 4 * scan_work + 1000) {
+                        // The whole-graph pass costs at least m; estimate it (in O(m)) only if
+                        // that fits its budget.
                         if (whole_graph_cost < 0 && static_cast<double>(dg->nEdges) <= whole_budget) {
                             whole_graph_cost = 0;
                             for (int64_t x = 0; x < dg->nVertices; ++x)
@@ -342,6 +374,7 @@ SearchEngine::SearchEngine(const AppGraph& data, const AppGraph& pattern,
         }
     }
 
+    // +8: the AVX2 intersection writes up to 8 elements past its result
     local_candidates.assign(order.size() + 1, std::vector<int>(max_candidates + 8));
     intersect_buffer.assign(max_candidates + 8, 0);
     identity.resize(max_candidates);
@@ -378,6 +411,10 @@ void SearchEngine::run() {
     }
 }
 
+// Points local_ptr[depth] at order[depth]'s candidates (indices into its candidate list) that are
+// adjacent to every matched backward neighbour: straight into the candidate-space index when
+// there is one backward neighbour, else the intersection, ping-ponged between
+// local_candidates[depth] and intersect_buffer without copying.
 bool SearchEngine::computeLocalCandidates(int depth) {
     const auto& edges = backward_edges[depth];
 
@@ -417,6 +454,9 @@ bool SearchEngine::computeLocalCandidates(int depth) {
         local_ptr[depth] = cur;
         local_len[depth] = size;
     }
+    // Symmetry breaking: this vertex's image must exceed the images of smaller_depths[depth].
+    // Local candidates are ascending candidate-list positions, and the list is sorted by data
+    // vertex ID, so the allowed ones are a suffix.
     bool trimmed = false;
     if (!smaller_depths[depth].empty() && local_len[depth] > 0) {
         int bound = -1;
@@ -444,12 +484,17 @@ bool SearchEngine::inducedConflict(int u, int v, int& conflict_u) const {
     return false;
 }
 
+// Matches completed at the last pattern vertex, without visiting each: every local candidate
+// completes exactly one match unless a (distinct) already-matched pattern vertex uses it.
+// Those pattern vertices -- the injectivity conflicts of the per-candidate loop -- are added
+// to used_by (a conflict bitset, by order depth) when given.
 long long SearchEngine::countLastLevel(int depth, uint64_t* used_by) const {
     const auto& cands_u = candidate_lists[order[depth]];
     const int* local = local_ptr[depth];
     const size_t len = local_len[depth];
     long long count = static_cast<long long>(len);
 
+    // Short lists: an O(1) check per candidate beats two binary searches per matched vertex.
     if (len <= 8 * static_cast<size_t>(depth)) {
         for (size_t k = 0; k < len; ++k) {
             const int v = cands_u[local[k]];
@@ -579,6 +624,7 @@ int SearchEngine::backtrack_cbj(int depth) {
 
     int target_depth = depth - 1;
     if (match_count == match_count_before) {
+        // the deepest conflict above this depth, if any
         for (int w = static_cast<int>((depth - 1) >> 6); depth > 0 && w >= 0; --w) {
             uint64_t bits = conflict[w];
             if (w == ((depth - 1) >> 6) && ((depth & 63) != 0)) bits &= (uint64_t{1} << (depth & 63)) - 1;

@@ -1,3 +1,6 @@
+/// @file
+/// Graph storage, the text-format reader and induced subgraphs. See AppGraph.h.
+
 #include "AppGraph.h"
 #include <fstream>
 #include <algorithm>
@@ -32,7 +35,7 @@ void AppGraph::copy_from(const AppGraph& other) {
     this->original_node_ids = other.original_node_ids;
     this->fast_node_to_idx = other.fast_node_to_idx;
     this->fast_labels = other.fast_labels;
-
+    
     if (other.c_graph) {
         this->c_graph = new Escape::CGraph();
         this->c_graph->nVertices = other.c_graph->nVertices;
@@ -177,7 +180,7 @@ bool AppGraph::hasEdge(int u_id, int v_id) const {
 
     Escape::EdgeIdx start = c_graph->offsets[u_idx];
     Escape::EdgeIdx end = c_graph->offsets[u_idx + 1];
-
+    
     return std::binary_search(c_graph->nbors + start, c_graph->nbors + end, v_idx);
 }
 

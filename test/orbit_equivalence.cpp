@@ -1,3 +1,13 @@
+// Exactness test for the reimplemented orbit routines in src/OrbitCounter.cpp: runs
+// Escape's original routines and the rewrites on the same graphs and requires identical
+// per-vertex counts (orbits 8, 14, 34, 62-64, 66, 68-71), identical per-edge 4-clique counts
+// and identical per-edge triangle lists.
+//
+// Usage: orbit_equivalence <graph file> <max vertices> <seeds>
+//   Tests BFS balls of up to <max vertices> vertices grown from the highest-degree vertex and
+//   from <seeds> - 1 random vertices; <max vertices> = 0 tests the whole graph once.
+// Build: g++ -std=c++17 -O3 -fopenmp -Iinclude -isystem extern test/orbit_equivalence.cpp \
+//            src/AppGraph.cpp extern/Escape/*.cpp -o build/orbit_equivalence
 #include "../src/OrbitCounter.cpp"
 #include <cstdlib>
 #include <queue>
@@ -48,6 +58,7 @@ bool testGraph(const AppGraph& app) {
     OrbitInfo escape(gout, 73, 12), rewrite(gout, 73, 12);
     bool ok = true;
 
+    // Triangle lists.
     auto t = Clock::now();
     TriangleInfo info = betterWedgeEnumerator(gout);
     TriangleList all_tris = storeAllTriangles(&cg, info.total);
@@ -94,6 +105,9 @@ bool testGraph(const AppGraph& app) {
     almostFiveCliqueOrbits(&cg, et, rewrite);
     const double rewrite_almost_ms = msSince(t);
 
+    // 4-vertex routines the g=5 branch replaces: 4-clique with per-edge counts, node-only
+    // 4-cycle (vs the per-edge version), and pattern 66 (reads per_edge_[1] from the
+    // other-four routine, run first on both sides).
     otherFourPatternOrbitCounter(gout, gin, escape);
     otherFourPatternOrbitCounter(gout, gin, rewrite);
     t = Clock::now();
@@ -147,6 +161,7 @@ bool testGraph(const AppGraph& app) {
         ok &= sameCounts(what.c_str(), escape.per_vertex_[o], rewrite.per_vertex_[o], n);
     }
 
+    // The chordal parts skipped by the flags must not change the parts that run.
     const bool flags[3][3] = {{true, false, false}, {false, true, false}, {false, false, true}};
     const std::vector<int> part_orbits[3] = {{62}, {63, 64}, {68, 69}};
     for (int f = 0; f < 3; ++f) {
