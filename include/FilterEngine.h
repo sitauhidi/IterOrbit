@@ -42,11 +42,16 @@ public:
     /// @param post_orbit_induction induce the data graph again after the orbit stage; false:
     ///                             the next round's NLF and semi-join read the graph the
     ///                             orbit stage counted on
+    /// @param edge_thinning        count orbits on the candidate subgraph without the edges no
+    ///                             pattern edge can map to (no pattern edge {u, u'} with one end
+    ///                             a candidate of u and the other of u'); an embedding uses none
+    ///                             of them, so each of its graphlets is still counted at its image
     FilterEngine(const AppGraph& data, const AppGraph& pattern, int g_size, bool use_full_graph_mode,
                  int max_iters = 1, bool print_stats = true,
                  bool enable_orbit_throttle = false, double orbit_throttle_threshold = 0.05,
                  bool enable_semi_join = true, bool arc_consistency = true,
-                 bool enable_orbit_filter = true, bool post_orbit_induction = true);
+                 bool enable_orbit_filter = true, bool post_orbit_induction = true,
+                 bool edge_thinning = false);
 
     /// Runs the filter. Returns false if some candidate set becomes empty, in which case the
     /// pattern has no embedding in the data graph.
@@ -79,6 +84,15 @@ private:
     bool orbitFilter();
     /// Sets `candidate_subgraph` to the data graph induced on the union of the candidate sets.
     void induceCandidateSubgraph();
+    /// A graph in CSR form that owns its arrays; `view` points into them.
+    struct OwnedCGraph {
+        std::vector<Escape::EdgeIdx> offsets;
+        std::vector<Escape::VertexIdx> nbors;
+        Escape::CGraph view{};
+    };
+    /// `g` without the edges no pattern edge can map to (see edge_thinning): same vertices and
+    /// internal indices, fewer edges.
+    void thinEdges(const AppGraph& g, OwnedCGraph& out) const;
     /// Total number of candidates over all pattern vertices.
     size_t getCandidateCount() const;
 
@@ -94,6 +108,7 @@ private:
     bool arc_consistency;
     bool enable_orbit_filter;
     bool post_orbit_induction;
+    bool edge_thinning;
 
     CandidateSets candidate_sets;
     OrbitCounts pattern_orbits;

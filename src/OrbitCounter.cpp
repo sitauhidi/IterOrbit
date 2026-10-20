@@ -21,7 +21,10 @@
 using namespace Escape;
 
 EVOKEOrbitCounter::EVOKEOrbitCounter(const AppGraph& g, int s, const std::vector<bool>* needed)
-    : graph(g), graphlet_size(s), needed_orbits(needed) {}
+    : cgraph(g.c_graph), graphlet_size(s), needed_orbits(needed) {}
+
+EVOKEOrbitCounter::EVOKEOrbitCounter(const Escape::CGraph* g, int s, const std::vector<bool>* needed)
+    : cgraph(g), graphlet_size(s), needed_orbits(needed) {}
 
 namespace {
 using Clock = std::chrono::high_resolution_clock;
@@ -843,9 +846,37 @@ void almostFiveCliqueOrbits(const CGraph* cg, const EdgeTriangles& et, OrbitInfo
 }
 
 OrbitCounts EVOKEOrbitCounter::count() {
+    OrbitCounts result;
+    countWith([&](double* const* per_vertex, const VertexIdx* mapping, VertexIdx n, int num_orbits) {
+        result.assign(n, {});
+        for (VertexIdx i = 0; i < n; ++i) {
+            std::vector<long long>& counts = result[i];
+            counts.reserve(num_orbits);
+            for (int orbit = 0; orbit < num_orbits; ++orbit) {
+                counts.push_back(per_vertex[orbit][mapping[i]]);
+            }
+        }
+    });
+    return result;
+}
+
+OrbitCounts EVOKEOrbitCounter::countColumns(const std::vector<int>& orbits) {
+    OrbitCounts result;
+    countWith([&](double* const* per_vertex, const VertexIdx* mapping, VertexIdx n, int) {
+        result.assign(orbits.size(), std::vector<long long>(n));
+        for (size_t j = 0; j < orbits.size(); ++j) {
+            const double* column = per_vertex[orbits[j]];
+            long long* out = result[j].data();
+            for (VertexIdx i = 0; i < n; ++i) out[i] = column[mapping[i]];
+        }
+    });
+    return result;
+}
+
+void EVOKEOrbitCounter::countWith(const Extract& extract) {
     last_timings = OrbitCountTimings();
-    CGraph* g_raw = graph.c_graph;
-    if (!g_raw) return {};
+    const CGraph* g_raw = cgraph;
+    if (!g_raw) return;
 
     auto t = Clock::now();
     VertexIdx* mapping;
@@ -1042,18 +1073,9 @@ OrbitCounts EVOKEOrbitCounter::count() {
     }
 
     t = Clock::now();
-    OrbitCounts result(g_relabel.nVertices);
-    for (VertexIdx i = 0; i < g_relabel.nVertices; ++i) {
-        std::vector<long long>& counts = result[i];
-        counts.reserve(num_node_orbits);
-        for (int orbit = 0; orbit < num_node_orbits; ++orbit) {
-            counts.push_back(orbit_counts.per_vertex_[orbit][mapping[i]]);
-        }
-    }
+    extract(orbit_counts.per_vertex_, mapping, g_relabel.nVertices, num_node_orbits);
 
     delete[] mapping;
     delete[] inverse;
     last_timings.copy_ms = msSince(t);
-
-    return result;
 }

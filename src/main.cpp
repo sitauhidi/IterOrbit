@@ -44,6 +44,9 @@ void print_usage() {
               << "  --count-only             Count matches without materializing each embedding\n"
               << "                           (avoids O(matches x pattern-size) memory for patterns\n"
               << "                           with huge result counts; incompatible with --verbose)\n"
+              << "  --max-embeddings <N>     Enumerate the embeddings one by one and stop after N of them\n"
+              << "                           (no symmetry breaking or last-level counting; incompatible\n"
+              << "                           with --count-only)\n"
               << "  --order <u,u,...>        Search in this matching order (pattern vertex IDs, a\n"
               << "                           permutation) instead of OrderEngine's (diagnostic)\n"
               << "  --order-mode <m>         Matching order: core (default; 2-core first, fewest\n"
@@ -53,7 +56,11 @@ void print_usage() {
               << "  --no-edge-orbit-filter   Keep candidate-space index entries whose data edge lies in\n"
               << "                           fewer triangles than the pattern edge (ablation)\n"
               << "  --no-symmetry            With --count-only: count every embedding instead of one per\n"
-              << "                           class of pattern automorphisms (ablation)\n";
+              << "                           class of pattern automorphisms (ablation)\n"
+              << "  --no-edge-thinning       Count orbits on the whole candidate subgraph, not only on the\n"
+              << "                           edges some pattern edge can map to (ablation)\n"
+              << "  --no-label-index         Don't build the data graph's neighbour-label index at load;\n"
+              << "                           LDF/NLF then count labels from the adjacency (ablation)\n";
 }
 
 void print_ms(const char* label, double ms) {
@@ -87,9 +94,12 @@ int main(int argc, char* argv[]) {
     bool enable_orbit_filter = true;
     bool post_orbit_induction = true;
     bool count_only = false;
+    long long max_embeddings = 0;
     bool search_stats = false;
     bool edge_orbit_filter = true;
     bool symmetry_breaking = true;
+    bool edge_thinning = true;
+    bool label_index = true;
     std::string order_arg;
     OrderMode order_mode = OrderMode::Core;
 
@@ -115,6 +125,15 @@ int main(int argc, char* argv[]) {
                 if (iterations < 0) throw std::invalid_argument("negative");
             } catch(...) {
                 std::cerr << "Invalid iteration count. --iterate must be an integer >= 0.\n";
+                print_usage();
+                return 1;
+            }
+        } else if (args[i] == "--max-embeddings" && i + 1 < args.size()) {
+            try {
+                max_embeddings = std::stoll(args[++i]);
+                if (max_embeddings <= 0) throw std::invalid_argument("non-positive");
+            } catch(...) {
+                std::cerr << "Invalid limit. --max-embeddings must be an integer >= 1.\n";
                 print_usage();
                 return 1;
             }
@@ -154,6 +173,10 @@ int main(int argc, char* argv[]) {
             edge_orbit_filter = false;
         } else if (args[i] == "--no-symmetry") {
             symmetry_breaking = false;
+        } else if (args[i] == "--no-edge-thinning") {
+            edge_thinning = false;
+        } else if (args[i] == "--no-label-index") {
+            label_index = false;
         } else if (args[i] == "--search-stats") {
             search_stats = true;
         } else if (args[i] == "--order" && i + 1 < args.size()) {
@@ -186,6 +209,11 @@ int main(int argc, char* argv[]) {
         print_usage();
         return 1;
     }
+    if (count_only && max_embeddings > 0) {
+        std::cerr << "Error: --max-embeddings enumerates embeddings; it cannot be used with --count-only.\n";
+        print_usage();
+        return 1;
+    }
     if (count_only && verbose) {
         std::cerr << "Error: --count-only cannot be used together with --verbose "
                      "(count-only mode never materializes matches to print).\n";
@@ -199,6 +227,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error reading data graph from " << data_path << std::endl;
         return 1;
     }
+    if (label_index) data_graph.buildLabelIndex();
     if (!pattern_graph.readFromFile(pattern_path)) {
         std::cerr << "Error reading pattern graph from " << pattern_path << std::endl;
         return 1;
@@ -225,13 +254,15 @@ int main(int argc, char* argv[]) {
     if (!post_orbit_induction) {
         std::cout << "Induction: once per round (single)" << std::endl;
     }
+    std::cout << "Edge thinning: " << (edge_thinning ? "on" : "off") << "; label index: " << (label_index ? "on" : "off") << std::endl;
 
     auto start = std::chrono::high_resolution_clock::now();
 
     bool print_filter_stats = filter_only || verbose;
     FilterEngine filter_engine(data_graph, pattern_graph, graphlet_size, use_full_graph, iterations,
                                 print_filter_stats, orbit_throttle, orbit_throttle_threshold,
-                                enable_semi_join, arc_consistency, enable_orbit_filter, post_orbit_induction);
+                                enable_semi_join, arc_consistency, enable_orbit_filter, post_orbit_induction,
+                                edge_thinning);
     const bool filter_ok = filter_engine.run();
 
     auto filter_end = std::chrono::high_resolution_clock::now();
@@ -297,6 +328,7 @@ int main(int argc, char* argv[]) {
                                edge_orbit_filter, use_symmetry ? &symmetry : nullptr);
     std::cout << "Index entries: " << search_engine.getIndexEntriesAfter() << " of "
               << search_engine.getIndexEntriesBefore() << " after the edge-orbit filter" << std::endl;
+    if (max_embeddings > 0) search_engine.setMatchLimit(max_embeddings, verbose);
     search_engine.run();
     if (search_engine.countOverflowed()) {
         std::cerr << "Warning: the match count exceeds 64 bits; reported as INT64_MAX." << std::endl;
@@ -309,6 +341,10 @@ int main(int argc, char* argv[]) {
     std::chrono::duration<double, std::milli> total_elapsed = end - start;
 
     std::cout << "\nMatches found: " << search_engine.getMatchCount() << std::endl;
+    if (max_embeddings > 0) {
+        std::cout << "Match limit: " << max_embeddings << (search_engine.limitReached() ? " (reached)" : " (not reached)")
+                  << std::endl;
+    }
 
     if (search_stats) {
         const auto& nodes = search_engine.getNodesPerDepth();

@@ -4,7 +4,6 @@
 
 #include "Symmetry.h"
 #include <algorithm>
-#include <map>
 #include <numeric>
 
 namespace {
@@ -16,33 +15,51 @@ namespace {
 class Refiner {
 public:
     Refiner(const std::vector<std::vector<int>>& adj, long long budget) : adj(adj), budget(budget) {
-        for (const auto& a : adj) edges += static_cast<long long>(a.size());
+        off.assign(adj.size() + 1, 0);
+        for (size_t v = 0; v < adj.size(); ++v) {
+            edges += static_cast<long long>(adj[v].size());
+            off[v + 1] = off[v] + 1 + adj[v].size();
+        }
+        sig[0].resize(off.back());
+        sig[1].resize(off.back());
     }
 
+    // Each round renames every vertex's signature (its colour, then its neighbours' colours sorted)
+    // to its rank among the distinct signatures of both sides in lexicographic order. The
+    // signatures are kept in flat arrays and ranked by sorting.
     bool refine(std::vector<int>& c1, std::vector<int>& c2) {
         const size_t n = adj.size();
         int classes = numClasses(c1);
-        std::vector<std::vector<int>> s1(n), s2(n);
         while (true) {
             work += 2 * (static_cast<long long>(n) + edges);
             if (work > budget) { out_of_budget = true; return false; }
-            auto signatures = [&](const std::vector<int>& c, std::vector<std::vector<int>>& s) {
-                for (size_t v = 0; v < n; ++v) {
-                    s[v].clear();
-                    s[v].push_back(c[v]);
-                    for (int w : adj[v]) s[v].push_back(c[w]);
-                    std::sort(s[v].begin() + 1, s[v].end());
-                }
+            fill(c1, sig[0]);
+            fill(c2, sig[1]);
+            auto range = [&](int i) {   // i < n: side 0, vertex i; else side 1, vertex i - n
+                const int side = i >= static_cast<int>(n);
+                const size_t v = side ? i - n : i;
+                const int* p = sig[side].data() + off[v];
+                return std::make_pair(p, p + (off[v + 1] - off[v]));
             };
-            signatures(c1, s1);
-            signatures(c2, s2);
-            std::map<std::vector<int>, int> id;
-            for (size_t v = 0; v < n; ++v) { id.emplace(s1[v], 0); id.emplace(s2[v], 0); }
+            rank.resize(2 * n);
+            std::iota(rank.begin(), rank.end(), 0);
+            std::sort(rank.begin(), rank.end(), [&](int a, int b) {
+                auto ra = range(a), rb = range(b);
+                return std::lexicographical_compare(ra.first, ra.second, rb.first, rb.second);
+            });
+            next_colour.resize(2 * n);
             int next = 0;
-            for (auto& kv : id) kv.second = next++;
+            for (size_t i = 0; i < rank.size(); ++i) {
+                if (i > 0) {
+                    auto ra = range(rank[i - 1]), rb = range(rank[i]);
+                    if (!std::equal(ra.first, ra.second, rb.first, rb.second)) ++next;
+                }
+                next_colour[rank[i]] = next;
+            }
+            ++next;
             std::vector<int> hist(next, 0);
-            for (size_t v = 0; v < n; ++v) { c1[v] = id[s1[v]]; ++hist[c1[v]]; }
-            for (size_t v = 0; v < n; ++v) { c2[v] = id[s2[v]]; --hist[c2[v]]; }
+            for (size_t v = 0; v < n; ++v) { c1[v] = next_colour[v]; ++hist[c1[v]]; }
+            for (size_t v = 0; v < n; ++v) { c2[v] = next_colour[n + v]; --hist[c2[v]]; }
             for (int h : hist) if (h != 0) return false;
             if (next == classes) return true;
             classes = next;
@@ -58,6 +75,20 @@ public:
     long long edges = 0;
     long long work = 0;
     bool out_of_budget = false;
+
+private:
+    void fill(const std::vector<int>& c, std::vector<int>& out) const {
+        for (size_t v = 0; v < adj.size(); ++v) {
+            int* p = out.data() + off[v];
+            *p = c[v];
+            for (size_t j = 0; j < adj[v].size(); ++j) p[1 + j] = c[adj[v][j]];
+            std::sort(p + 1, p + 1 + adj[v].size());
+        }
+    }
+
+    std::vector<size_t> off;          // vertex v's signature: [off[v], off[v + 1])
+    std::vector<int> sig[2];
+    std::vector<int> rank, next_colour;
 };
 
 bool hasEdge(const std::vector<std::vector<int>>& adj, int a, int b) {

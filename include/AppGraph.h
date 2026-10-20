@@ -4,6 +4,7 @@
 #ifndef APP_GRAPH_H
 #define APP_GRAPH_H
 
+#include <memory>
 #include <string>
 #include <vector>
 #include <unordered_set>
@@ -17,6 +18,17 @@
 /// every per-vertex array produced from it (e.g. OrbitCounts). A subgraph keeps the node IDs of
 /// the graph it was taken from, so candidate sets, which hold node IDs, stay valid across
 /// subgraphs.
+/// Per-label lookups on a data graph, built once at load (AppGraph::buildLabelIndex), as the SOTA
+/// tools' graph loader builds its neighbour-label frequencies.
+struct LabelIndex {
+    /// Largest label, -1 if the graph is empty.
+    int max_label = -1;
+    /// Vertex v has nlf_count[i] neighbours of label nlf_label[i], for i in
+    /// [nlf_offsets[v], nlf_offsets[v + 1]), labels increasing; labels it has no neighbour of are absent.
+    std::vector<size_t> nlf_offsets;
+    std::vector<int> nlf_label, nlf_count;
+};
+
 class AppGraph {
 public:
     /// Adjacency in CSR form, indexed by internal index; neighbour lists are sorted. Owned.
@@ -27,11 +39,17 @@ public:
     std::vector<int> fast_node_to_idx;
     /// Node ID -> label, or -1 if the vertex is not in this graph.
     std::vector<int> fast_labels;
+    /// Built by buildLabelIndex() (the data graph's); null otherwise. Shared by copies.
+    std::shared_ptr<const LabelIndex> label_index;
 
+    /// Builds label_index.
+    void buildLabelIndex();
     AppGraph() = default;
     ~AppGraph();
     AppGraph(const AppGraph& other);
     AppGraph& operator=(const AppGraph& other);
+    AppGraph(AppGraph&& other) noexcept;
+    AppGraph& operator=(AppGraph&& other) noexcept;
 
     /// Internal index of a node ID, or -1 if the vertex is not in this graph.
     inline int get_node_idx(int node_id) const {
@@ -69,6 +87,8 @@ public:
     /// The subgraph of `original` induced by `node_subset` (node IDs): those vertices and
     /// every edge of `original` between two of them. Node IDs and labels are kept.
     static AppGraph createSubgraph(const AppGraph& original, const std::unordered_set<int>& node_subset);
+    /// The same, for node IDs given sorted and without duplicates.
+    static AppGraph createSubgraph(const AppGraph& original, const std::vector<int>& sorted_ids);
 
 private:
     void build(const std::vector<int>& vertex_ids, const std::vector<int>& vertex_labels,

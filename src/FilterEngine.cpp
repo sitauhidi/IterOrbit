@@ -3,7 +3,6 @@
 /// Section "Methodology" of the paper. See FilterEngine.h.
 
 #include "FilterEngine.h"
-#include <unordered_set>
 #include <algorithm>
 #include <numeric>
 #include <cmath>
@@ -16,7 +15,8 @@ FilterEngine::FilterEngine(const AppGraph& data, const AppGraph& pattern, int g_
                             int max_iters, bool print_stats_,
                             bool enable_orbit_throttle_, double orbit_throttle_threshold_,
                             bool enable_semi_join_, bool arc_consistency_,
-                            bool enable_orbit_filter_, bool post_orbit_induction_)
+                            bool enable_orbit_filter_, bool post_orbit_induction_,
+                            bool edge_thinning_)
     : data_graph(data),
       pattern_graph(pattern),
       graphlet_size(g_size),
@@ -28,19 +28,33 @@ FilterEngine::FilterEngine(const AppGraph& data, const AppGraph& pattern, int g_
       enable_semi_join(enable_semi_join_),
       arc_consistency(arc_consistency_),
       enable_orbit_filter(enable_orbit_filter_),
-      post_orbit_induction(post_orbit_induction_)
+      post_orbit_induction(post_orbit_induction_),
+      edge_thinning(edge_thinning_)
 {}
 
 // G_d^(t): the subgraph of the data graph induced by the union of the candidate sets. Skipped when
 // no candidate has been removed since the last induction (the same union gives the same graph).
+// Induced from the previous G_d^(t) when there is one: it contains every candidate (sets only
+// shrink), and the subgraph it induces on them is the one the data graph induces. The union is
+// marked over the source graph's internal indices, which are in node-ID order, so it comes out
+// sorted without sorting (candidate sets overlap heavily on unlabelled graphs).
 void FilterEngine::induceCandidateSubgraph() {
     const size_t count = getCandidateCount();
     if (count == subgraph_candidate_count) return;
-    std::unordered_set<int> candidate_nodes;
+    const bool from_previous = subgraph_candidate_count != SIZE_MAX && candidate_subgraph.c_graph;
+    const AppGraph& source = from_previous ? candidate_subgraph : data_graph;
+    std::vector<char> in_union(source.original_node_ids.size(), 0);
     for (const auto& pair : candidate_sets) {
-        candidate_nodes.insert(pair.second.begin(), pair.second.end());
+        for (int v : pair.second) {
+            const int idx = source.get_node_idx(v);
+            if (idx != -1) in_union[idx] = 1;
+        }
     }
-    candidate_subgraph = AppGraph::createSubgraph(data_graph, candidate_nodes);
+    std::vector<int> candidate_nodes;
+    for (size_t idx = 0; idx < in_union.size(); ++idx) {
+        if (in_union[idx]) candidate_nodes.push_back(source.original_node_ids[idx]);
+    }
+    candidate_subgraph = AppGraph::createSubgraph(source, candidate_nodes);
     subgraph_candidate_count = count;
 }
 
@@ -64,8 +78,12 @@ bool FilterEngine::run() {
     }
 
     max_data_label = 0;
-    for (int label : data_graph.fast_labels) {
-        if (label > max_data_label) max_data_label = label;
+    if (data_graph.label_index) {
+        max_data_label = std::max(0, data_graph.label_index->max_label);
+    } else {
+        for (int label : data_graph.fast_labels) {
+            if (label > max_data_label) max_data_label = label;
+        }
     }
 
     // Round 1's NLF runs on the full data graph, so it is applied in the same pass as LDF.
@@ -202,10 +220,11 @@ bool FilterEngine::run() {
     return true;
 }
 
-// LDF (label, degree) and NLF on the full data graph in one pass over the data vertices in ID
-// order: each data vertex's neighbour labels are counted once (only labels the pattern
-// requires, capped at the largest requirement) and shared by every same-label pattern vertex.
-// Same candidates, in the same order, as LDF followed by nlfFilter(data_graph).
+// LDF (label, degree) and NLF on the full data graph: each data vertex's neighbour-label counts
+// (only labels the pattern requires) are read once and shared by every same-label pattern vertex.
+// One pass over the data vertices in ID order; a vertex's counts come from the data graph's label
+// index (built at load, as the SOTA tools' loaders build theirs) or, without it, from its adjacency.
+// Either way the same candidates, in the same (node-ID) order, as LDF followed by nlfFilter(data_graph).
 bool FilterEngine::ldfNlfFilter(size_t& ldf_only_count) {
     struct PatternVertex {
         int u;
@@ -238,20 +257,22 @@ bool FilterEngine::ldfNlfFilter(size_t& ldf_only_count) {
     }
     const int cap = std::min(max_requirement, 65535);
 
-    const Escape::CGraph* g = data_graph.c_graph;
-    const size_t n = g ? g->nVertices : 0;
-    std::vector<int16_t> slot_of_vertex(n, -1);
-    for (size_t idx = 0; idx < n; ++idx) {
-        int lbl = data_graph.get_label_fast(data_graph.original_node_ids[idx]);
-        if (lbl >= 0 && lbl <= max_data_label) slot_of_vertex[idx] = static_cast<int16_t>(slot_of_label[lbl]);
-    }
-
     candidate_sets.clear();
     for (int u : pattern_graph.original_node_ids) candidate_sets[u];
     for (auto& group : pattern_by_label) {
         for (PatternVertex& pv : group) pv.out = &candidate_sets[pv.u];
     }
     ldf_only_count = 0;
+
+    const Escape::CGraph* g = data_graph.c_graph;
+    const size_t n = g ? g->nVertices : 0;
+    const LabelIndex* index = data_graph.label_index.get();
+    std::vector<int16_t> slot_of_vertex(index ? 0 : n, -1);   // only needed without the index
+    for (size_t idx = 0; idx < slot_of_vertex.size(); ++idx) {
+        int lbl = data_graph.get_label_fast(data_graph.original_node_ids[idx]);
+        if (lbl >= 0 && lbl <= max_data_label) slot_of_vertex[idx] = static_cast<int16_t>(slot_of_label[lbl]);
+    }
+
     std::vector<uint16_t> counts(num_slots);
     for (size_t idx = 0; idx < n; ++idx) {
         int v = data_graph.original_node_ids[idx];
@@ -267,9 +288,17 @@ bool FilterEngine::ldfNlfFilter(size_t& ldf_only_count) {
             if (pv.unsatisfiable) continue;
             if (!counted) {
                 std::fill(counts.begin(), counts.end(), 0);
-                for (Escape::EdgeIdx e = begin; e < end; ++e) {
-                    int slot = slot_of_vertex[g->nbors[e]];
-                    if (slot >= 0 && counts[slot] < cap) ++counts[slot];
+                if (index) {
+                    for (size_t t = index->nlf_offsets[idx]; t < index->nlf_offsets[idx + 1]; ++t) {
+                        const int l = index->nlf_label[t];
+                        const int slot = (l >= 0 && l <= max_data_label) ? slot_of_label[l] : -1;
+                        if (slot >= 0) counts[slot] = static_cast<uint16_t>(std::min(index->nlf_count[t], cap));
+                    }
+                } else {
+                    for (Escape::EdgeIdx e = begin; e < end; ++e) {
+                        int slot = slot_of_vertex[g->nbors[e]];
+                        if (slot >= 0 && counts[slot] < cap) ++counts[slot];
+                    }
                 }
                 counted = true;
             }
@@ -441,6 +470,9 @@ bool FilterEngine::semiJoinFilter(const AppGraph& neighbor_graph) {
     return true;
 }
 
+// AC-3 over pattern vertices. A re-check of u tests only the pattern neighbours u' whose set has
+// shrunk since u was last checked: a support in an unchanged set is still there. The same fixpoint
+// as re-checking every neighbour.
 bool FilterEngine::arcConsistencyFilter(const AppGraph& neighbor_graph) {
     const Escape::CGraph* g = neighbor_graph.c_graph;
     const size_t num_words = (g && g->nVertices > 0) ? static_cast<size_t>((g->nVertices - 1) / 64) + 1 : 1;
@@ -455,8 +487,10 @@ bool FilterEngine::arcConsistencyFilter(const AppGraph& neighbor_graph) {
     const size_t k = pattern_ids.size();
     std::vector<std::vector<uint64_t>> bits(k, std::vector<uint64_t>(num_words, 0ULL));
     std::vector<std::vector<int>> pattern_nbrs(k);
+    std::vector<std::vector<int>*> cands(k);
     for (size_t p = 0; p < k; ++p) {
-        for (int v : candidate_sets[pattern_ids[p]]) {
+        cands[p] = &candidate_sets[pattern_ids[p]];
+        for (int v : *cands[p]) {
             const int v_idx = neighbor_graph.get_node_idx(v);
             if (v_idx != -1) bits[p][v_idx / 64] |= 1ULL << (v_idx % 64);
         }
@@ -466,21 +500,44 @@ bool FilterEngine::arcConsistencyFilter(const AppGraph& neighbor_graph) {
             pattern_nbrs[p].push_back(it == position.end() ? -1 : it->second);
         }
     }
+    // back[p][n]: the position of p among the pattern neighbours of pattern_nbrs[p][n]
+    std::vector<std::vector<int>> back(k);
+    for (size_t p = 0; p < k; ++p) {
+        for (int q : pattern_nbrs[p]) {
+            int pos = -1;
+            if (q >= 0) {
+                for (size_t m = 0; m < pattern_nbrs[q].size(); ++m) {
+                    if (pattern_nbrs[q][m] == static_cast<int>(p)) { pos = static_cast<int>(m); break; }
+                }
+            }
+            back[p].push_back(pos);
+        }
+    }
+    // dirty[p][n]: C(pattern_nbrs[p][n]) shrank since p was last checked.
+    std::vector<std::vector<char>> dirty(k);
+    for (size_t p = 0; p < k; ++p) dirty[p].assign(pattern_nbrs[p].size(), 1);
 
     std::vector<int> queue(k);
     std::iota(queue.begin(), queue.end(), 0);
     std::vector<char> queued(k, 1);
+    std::vector<int> check;
     size_t head = 0;
     while (head < queue.size()) {
         const int p = queue[head++];
         queued[p] = 0;
-        auto& candidates_v = candidate_sets[pattern_ids[p]];
+        const size_t d = pattern_nbrs[p].size();
+        check.clear();
+        for (size_t n = 0; n < d; ++n) {
+            if (dirty[p][n]) { check.push_back(static_cast<int>(n)); dirty[p][n] = 0; }
+        }
+        auto& candidates_v = *cands[p];
         size_t write = 0;
         for (size_t read = 0; read < candidates_v.size(); ++read) {
             const int v = candidates_v[read];
             const int v_idx = neighbor_graph.get_node_idx(v);
             bool supported = v_idx != -1;
-            for (size_t n = 0; supported && n < pattern_nbrs[p].size(); ++n) {
+            for (size_t c = 0; supported && c < check.size(); ++c) {
+                const int n = check[c];
                 const int q = pattern_nbrs[p][n];
                 supported = false;
                 if (q < 0) break;
@@ -500,8 +557,11 @@ bool FilterEngine::arcConsistencyFilter(const AppGraph& neighbor_graph) {
         candidates_v.resize(write);
         if (candidates_v.empty()) return false;
         if (!shrank) continue;
-        for (int q : pattern_nbrs[p]) {
-            if (q >= 0 && !queued[q]) { queued[q] = 1; queue.push_back(q); }
+        for (size_t n = 0; n < d; ++n) {
+            const int q = pattern_nbrs[p][n];
+            if (q < 0) continue;
+            if (back[p][n] >= 0) dirty[q][back[p][n]] = 1;
+            if (!queued[q]) { queued[q] = 1; queue.push_back(q); }
         }
     }
     return true;
@@ -532,8 +592,17 @@ bool FilterEngine::orbitFilter() {
 
     double subgraph_ms = ms_since(subgraph_start);
 
+    auto thin_start = Clock::now();
+    OwnedCGraph thinned;
+    const Escape::CGraph* counted = graph_for_orbit_counting->c_graph;
+    if (edge_thinning && counted) {
+        thinEdges(*graph_for_orbit_counting, thinned);
+        counted = &thinned.view;
+    }
+    double thin_ms = ms_since(thin_start);
+
     auto count_start = Clock::now();
-    EVOKEOrbitCounter data_counter(*graph_for_orbit_counting, graphlet_size, &needed_orbits);
+    EVOKEOrbitCounter data_counter(counted, graphlet_size, &needed_orbits);
 
     // A vertex's clique count (orbit 14: 4-clique, 72: 5-clique) is only ever compared against
     // that orbit's count for the pattern vertices it's a candidate of, so counting it past the
@@ -557,25 +626,40 @@ bool FilterEngine::orbitFilter() {
         }
         data_counter.setCliqueVertexCap(orbit, &clique_caps[c]);
     }
-    OrbitCounts data_orbits = data_counter.count();
+    // Only the orbits some pattern vertex has are read back, one column per orbit; a candidate of u
+    // is then tested only on u's non-zero orbits (counts are never negative).
+    std::vector<int> columns_of;
+    std::vector<int> column(needed_orbits.size(), -1);
+    for (size_t o = 0; o < needed_orbits.size(); ++o) {
+        if (needed_orbits[o]) {
+            column[o] = static_cast<int>(columns_of.size());
+            columns_of.push_back(static_cast<int>(o));
+        }
+    }
+    OrbitCounts data_columns = data_counter.countColumns(columns_of);
     double count_ms = ms_since(count_start);
 
     auto compare_start = Clock::now();
+    const size_t num_counted = graph_for_orbit_counting->c_graph ? graph_for_orbit_counting->c_graph->nVertices : 0;
+    std::vector<std::pair<const long long*, long long>> requirements;
     for (auto& pair : candidate_sets) {
         int u = pair.first;
         const auto& orbit_u = pattern_orbits.at(pattern_graph.get_node_idx(u));
         auto& candidates_v = pair.second;
+        requirements.clear();
+        for (size_t o = 0; o < orbit_u.size(); ++o) {
+            if (orbit_u[o] > 0) requirements.emplace_back(data_columns[column[o]].data(), orbit_u[o]);
+        }
 
         size_t write = 0;
         for (size_t read = 0; read < candidates_v.size(); ++read) {
             int v = candidates_v[read];
             int v_idx = graph_for_orbit_counting->get_node_idx(v);
-            if (v_idx == -1 || static_cast<size_t>(v_idx) >= data_orbits.size()) continue;
-            const auto& orbit_v = data_orbits[v_idx];
+            if (v_idx == -1 || static_cast<size_t>(v_idx) >= num_counted) continue;
 
             bool compatible = true;
-            for (size_t i = 0; i < orbit_u.size(); ++i) {
-                if (orbit_v[i] < orbit_u[i]) {
+            for (const auto& req : requirements) {
+                if (req.first[v_idx] < req.second) {
                     compatible = false;
                     break;
                 }
@@ -590,7 +674,7 @@ bool FilterEngine::orbitFilter() {
 
     if (print_stats) {
         const OrbitCountTimings& ot = data_counter.timings();
-        std::cout << "Orbit stage breakdown (ms): subgraph " << subgraph_ms
+        std::cout << "Orbit stage breakdown (ms): subgraph " << subgraph_ms << ", thin " << thin_ms
                   << ", relabel+DAG " << ot.relabel_dag_ms << ", 3-orbits " << ot.three_ms
                   << ", 4-closed-form " << ot.four_closed_ms << ", paw/diamond " << ot.four_other_ms
                   << ", 4-cycle " << ot.four_cycle_ms << ", 4-clique " << ot.four_clique_ms
@@ -604,9 +688,58 @@ bool FilterEngine::orbitFilter() {
                   << ", compare " << ms_since(compare_start)
                   << " | subgraph |V|=" << graph_for_orbit_counting->original_node_ids.size()
                   << " |E|=" << (graph_for_orbit_counting->c_graph ? graph_for_orbit_counting->c_graph->nEdges / 2 : 0)
-                  << std::endl;
+                  << " counted |E|=" << (counted ? counted->nEdges / 2 : 0) << std::endl;
     }
     return true;
+}
+
+// An edge {a, b} is kept iff some pattern edge {u, u'} has a in C(u) and b in C(u'): with mask(v) the
+// pattern vertices v is a candidate of and adj(v) the union of their pattern neighbourhoods, iff
+// mask(a) & adj(b) is non-empty (the relation is symmetric).
+void FilterEngine::thinEdges(const AppGraph& g, OwnedCGraph& out) const {
+    const Escape::CGraph* cg = g.c_graph;
+    const size_t n = cg->nVertices;
+    std::vector<int> position(pattern_graph.original_node_ids.size(), -1);
+    std::vector<int> ids;
+    for (const auto& pair : candidate_sets) {
+        position[pattern_graph.get_node_idx(pair.first)] = static_cast<int>(ids.size());
+        ids.push_back(pair.first);
+    }
+    const size_t words = (ids.size() + 63) / 64;
+    std::vector<uint64_t> pattern_adj(ids.size() * words, 0);
+    for (size_t p = 0; p < ids.size(); ++p) {
+        for (int u_prime : pattern_graph.getNeighbors(ids[p])) {
+            const int q = position[pattern_graph.get_node_idx(u_prime)];
+            if (q >= 0) pattern_adj[p * words + q / 64] |= uint64_t{1} << (q % 64);
+        }
+    }
+    std::vector<uint64_t> mask(n * words, 0), adj(n * words, 0);
+    for (size_t p = 0; p < ids.size(); ++p) {
+        for (int v : candidate_sets.at(ids[p])) {
+            const int v_idx = g.get_node_idx(v);
+            if (v_idx == -1) continue;
+            mask[v_idx * words + p / 64] |= uint64_t{1} << (p % 64);
+            for (size_t w = 0; w < words; ++w) adj[v_idx * words + w] |= pattern_adj[p * words + w];
+        }
+    }
+    out.offsets.assign(n + 1, 0);
+    out.nbors.clear();
+    out.nbors.reserve(cg->nEdges);
+    for (size_t a = 0; a < n; ++a) {
+        const uint64_t* ma = mask.data() + a * words;
+        for (Escape::EdgeIdx e = cg->offsets[a]; e < cg->offsets[a + 1]; ++e) {
+            const Escape::VertexIdx b = cg->nbors[e];
+            const uint64_t* ab = adj.data() + b * words;
+            bool keep = false;
+            for (size_t w = 0; w < words && !keep; ++w) keep = (ma[w] & ab[w]) != 0;
+            if (keep) out.nbors.push_back(b);
+        }
+        out.offsets[a + 1] = static_cast<Escape::EdgeIdx>(out.nbors.size());
+    }
+    out.view.nVertices = static_cast<Escape::VertexIdx>(n);
+    out.view.nEdges = static_cast<Escape::EdgeIdx>(out.nbors.size());
+    out.view.offsets = out.offsets.data();
+    out.view.nbors = out.nbors.data();
 }
 
 void FilterEngine::countCandidates(const std::string& filter_step_name) const {

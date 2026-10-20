@@ -31,7 +31,25 @@ AppGraph& AppGraph::operator=(const AppGraph& other) {
     return *this;
 }
 
+AppGraph::AppGraph(AppGraph&& other) noexcept {
+    *this = std::move(other);
+}
+
+AppGraph& AppGraph::operator=(AppGraph&& other) noexcept {
+    if (this != &other) {
+        clear();
+        c_graph = other.c_graph;
+        other.c_graph = nullptr;
+        original_node_ids = std::move(other.original_node_ids);
+        fast_node_to_idx = std::move(other.fast_node_to_idx);
+        fast_labels = std::move(other.fast_labels);
+        label_index = std::move(other.label_index);
+    }
+    return *this;
+}
+
 void AppGraph::copy_from(const AppGraph& other) {
+    this->label_index = other.label_index;
     this->original_node_ids = other.original_node_ids;
     this->fast_node_to_idx = other.fast_node_to_idx;
     this->fast_labels = other.fast_labels;
@@ -167,6 +185,32 @@ void AppGraph::build(const std::vector<int>& vertex_ids, const std::vector<int>&
     }
 }
 
+void AppGraph::buildLabelIndex() {
+    auto index = std::make_shared<LabelIndex>();
+    const size_t n = original_node_ids.size();
+    std::vector<int> label(n);
+    for (size_t v = 0; v < n; ++v) {
+        label[v] = get_label_fast(original_node_ids[v]);
+        index->max_label = std::max(index->max_label, label[v]);
+    }
+    index->nlf_offsets.assign(n + 1, 0);
+    std::vector<int> labels;
+    for (size_t v = 0; v < n; ++v) {
+        labels.clear();
+        for (Escape::EdgeIdx e = c_graph->offsets[v]; e < c_graph->offsets[v + 1]; ++e) labels.push_back(label[c_graph->nbors[e]]);
+        std::sort(labels.begin(), labels.end());
+        for (size_t i = 0; i < labels.size();) {
+            size_t j = i;
+            while (j < labels.size() && labels[j] == labels[i]) ++j;
+            index->nlf_label.push_back(labels[i]);
+            index->nlf_count.push_back(static_cast<int>(j - i));
+            i = j;
+        }
+        index->nlf_offsets[v + 1] = index->nlf_label.size();
+    }
+    label_index = std::move(index);
+}
+
 int AppGraph::degree(int node_id) const {
     int idx = get_node_idx(node_id);
     if (idx == -1) return 0;
@@ -199,15 +243,20 @@ std::vector<int> AppGraph::getNeighbors(int node_id) const {
 }
 
 AppGraph AppGraph::createSubgraph(const AppGraph& original, const std::unordered_set<int>& node_subset) {
+    std::vector<int> ids(node_subset.begin(), node_subset.end());
+    std::sort(ids.begin(), ids.end());
+    return createSubgraph(original, ids);
+}
+
+AppGraph AppGraph::createSubgraph(const AppGraph& original, const std::vector<int>& sorted_ids) {
     AppGraph subgraph;
 
-    subgraph.original_node_ids.reserve(node_subset.size());
-    for (int node_id : node_subset) {
+    subgraph.original_node_ids.reserve(sorted_ids.size());
+    for (int node_id : sorted_ids) {
         if (original.get_label_fast(node_id) != -1) {
             subgraph.original_node_ids.push_back(node_id);
         }
     }
-    std::sort(subgraph.original_node_ids.begin(), subgraph.original_node_ids.end());
 
     int max_id = subgraph.original_node_ids.empty() ? -1 : subgraph.original_node_ids.back();
     subgraph.fast_node_to_idx.assign(max_id + 1, -1);

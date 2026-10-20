@@ -7,6 +7,8 @@
 #include "AppGraph.h"
 #include <vector>
 #include <unordered_map>
+#include <functional>
+#include <cstdint>
 
 /// Graphlet orbit counts of a graph: counts[i][k] is the number of non-induced occurrences of
 /// orbit k rooted at the vertex with internal index i. Orbits are numbered as in Escape/EVOKE
@@ -42,9 +44,15 @@ public:
     ///                       filter passes the orbits some pattern vertex has: an orbit no
     ///                       pattern vertex has cannot reject a candidate.
     EVOKEOrbitCounter(const AppGraph& g, int size, const std::vector<bool>* needed_orbits = nullptr);
+    /// Counts on a graph given directly (vertices 0..n-1, sorted neighbour lists).
+    EVOKEOrbitCounter(const Escape::CGraph* g, int size, const std::vector<bool>* needed_orbits = nullptr);
 
     /// Counts the orbits. The result is indexed by internal index, then orbit.
     OrbitCounts count();
+
+    /// Counts the orbits and returns only the given ones, by column: result[j][i] is orbit
+    /// orbits[j] of the vertex with internal index i. Same counts as count().
+    OrbitCounts countColumns(const std::vector<int>& orbits);
 
     /// Timings of the last count() call.
     const OrbitCountTimings& timings() const { return last_timings; }
@@ -58,8 +66,14 @@ public:
     }
 
 private:
+    /// Receives the counts (per_vertex[orbit][relabelled vertex]), the internal index ->
+    /// relabelled vertex map, the vertex count and the orbit count.
+    using Extract = std::function<void(double* const*, const int64_t*, int64_t, int)>;
+    /// Counts the orbits and hands them to extract before they are freed.
+    void countWith(const Extract& extract);
+
     OrbitCountTimings last_timings;
-    const AppGraph& graph;
+    const Escape::CGraph* cgraph;
     int graphlet_size;
     const std::vector<bool>* needed_orbits;
     const std::vector<double>* clique4_cap = nullptr;

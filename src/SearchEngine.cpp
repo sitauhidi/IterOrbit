@@ -392,6 +392,7 @@ void SearchEngine::mergeConflicts(int target_depth, int source_depth) {
 void SearchEngine::run() {
     matches.clear();
     match_count = 0;
+    stopped = false;
     std::fill(fast_mapping.begin(), fast_mapping.end(), -1);
     std::fill(fast_mapping_local_index.begin(), fast_mapping_local_index.end(), -1);
     std::fill(fast_inverse_mapping.begin(), fast_inverse_mapping.end(), -1);
@@ -521,9 +522,10 @@ long long SearchEngine::countLastLevel(int depth, uint64_t* used_by) const {
 void SearchEngine::backtrack(int depth) {
     if (static_cast<size_t>(depth) == order.size()) {
         ++match_count;
-        if (!count_only) {
+        if (!count_only && store_matches) {
             matches.push_back(fast_mapping);
         }
+        if (match_limit > 0 && match_count >= match_limit) stopped = true;
         return;
     }
 
@@ -554,15 +556,17 @@ void SearchEngine::backtrack(int depth) {
         fast_mapping_local_index[u] = -1;
         fast_inverse_mapping[v] = -1;
         in_use[v] = 0;
+        if (stopped) return;
     }
 }
 
 int SearchEngine::backtrack_cbj(int depth) {
     if (static_cast<size_t>(depth) == order.size()) {
         ++match_count;
-        if (!count_only) {
+        if (!count_only && store_matches) {
             matches.push_back(fast_mapping);
         }
+        if (match_limit > 0 && match_count >= match_limit) stopped = true;
         return depth - 1;
     }
 
@@ -609,6 +613,7 @@ int SearchEngine::backtrack_cbj(int depth) {
         fast_mapping_local_index[u] = -1;
         fast_inverse_mapping[v] = -1;
         in_use[v] = 0;
+        if (stopped) return -1;   // the match limit unwinds the whole search
 
         if (backjump_depth >= 0 && backjump_depth < depth) {
             setConflict(conflict, backjump_depth);

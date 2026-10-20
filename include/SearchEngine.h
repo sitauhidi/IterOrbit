@@ -44,13 +44,21 @@ public:
                  bool count_only = false, bool edge_orbit_filter = false,
                  const SymmetryBreaking* symmetry = nullptr);
 
+    /// Enumeration with a match limit (the protocol of Sun and Luo): without count_only, visit the
+    /// embeddings one by one and stop after `limit` of them (0: no limit); `store` keeps them for
+    /// getMatches(). Call before run().
+    void setMatchLimit(long long limit, bool store) { match_limit = limit; store_matches = store; }
+
     /// Runs the search.
     void run();
 
-    /// The embeddings found (empty with count_only).
+    /// The embeddings found (empty with count_only, or when not stored).
     const std::vector<Mapping>& getMatches() const { return matches; }
-    /// The number of embeddings, saturated at INT64_MAX (see countOverflowed()).
-    long long getMatchCount() const { return count_only ? match_count : static_cast<long long>(matches.size()); }
+    /// The number of embeddings, saturated at INT64_MAX (see countOverflowed()); with a match
+    /// limit, at most the limit.
+    long long getMatchCount() const { return match_count; }
+    /// Whether the search stopped at the match limit.
+    bool limitReached() const { return stopped; }
     /// Search-tree nodes visited at each order depth.
     const std::vector<long long>& getNodesPerDepth() const { return nodes_per_depth; }
     /// Local candidates computed at each order depth, summed over the visits.
@@ -97,6 +105,9 @@ private:
     bool enable_cbj;
     bool count_only;
     long long match_count = 0;
+    long long match_limit = 0;
+    bool store_matches = true;
+    bool stopped = false;
 
     /// The partial embedding: pattern node ID -> data node ID (-1 if unmapped). Like the three
     /// arrays below, a flat array, so that assigning and undoing take O(1).
