@@ -157,3 +157,19 @@ The configuration is set through environment variables: `GRAPHLET_SIZE`, `ITERAT
 
 `test/orbit_equivalence.cpp` checks the reimplemented orbit-counting routines against Escape's
 originals on subgraphs of a given graph; its header comment gives the build line and usage.
+
+## Reproducing the paper's results
+
+`analysis/` holds every number, table and figure of the paper, and the exploratory analyses behind it:
+
+- `analysis/data/`: the experiments' results as CSV files (`MANIFEST.csv` lists each file and its source).
+- `analysis/analysis.ipynb`: the notebook that computes everything from those CSVs, one section per figure,
+  table or subsection, with its outputs. `analysis/analysis.py` is the same code as a script; the notebook is
+  generated from it.
+- `analysis/build_data.py`: rebuilds `analysis/data/` from the experiments' logs (not part of this repository).
+
+```bash
+pip install -r analysis/requirements.txt
+jupyter notebook analysis/analysis.ipynb      # figures shown inline
+python analysis/analysis.py                   # or as a script: figures written as PDFs to analysis/figures/
+```
