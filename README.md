@@ -86,6 +86,7 @@ Ordering and search:
 |---|---|
 | `--induced` | Induced subgraph isomorphism (default: non-induced). |
 | `--count-only` | Count the embeddings without storing them. Cannot be combined with `--verbose`. |
+| `--max-embeddings <N>` | Enumerate the embeddings one by one and stop after `N` of them (no symmetry breaking or last-level counting). Cannot be combined with `--count-only`. |
 | `--cbj` | Conflict-directed backjumping. |
 | `--order-mode <core\|orbit\|core-orbit>` | Matching order (default `core`); see `include/OrderEngine.h`. |
 | `--order <u,u,...>` | Use this matching order (a permutation of the pattern's vertex IDs). |
