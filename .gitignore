@@ -3,5 +3,6 @@ test/__pycache__/
 build_login/*
 docs/
 analysis/figures/
+analysis/data/
 analysis/.ipynb_checkpoints/
 __pycache__/
