@@ -1,0 +1,15 @@
+diff -ruN -x target -x .git gup/src/main.rs gup-timed/src/main.rs
+--- gup/src/main.rs	2026-09-20 21:41:47.000000000 +0100
++++ gup-timed/src/main.rs	2026-10-18 23:46:47.000000000 +0100
+@@ -105,7 +105,11 @@
+         no_edge_nogood: args.no_edge_nogood,
+         no_backjumping: args.no_backjumping,
+     };
++    // Timed for the comparison: Gup::new builds the data-graph indexes the filter reads (label-sorted
++    // edge list, neighbour-label counts, label groups, maximum neighbour degrees), once per process.
++    let index_start = Instant::now();
+     let gup = Gup::new(&g, opt);
++    println!("index_sec: {}", index_start.elapsed().as_secs_f32());
+ 
+     let wholestart = Instant::now();
+     println!("results:");

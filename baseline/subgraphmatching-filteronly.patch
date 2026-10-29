@@ -1,0 +1,21 @@
+--- a/vlabel/matching/StudyPerformance.cpp
++++ b/vlabel/matching/StudyPerformance.cpp
+@@ -231,7 +231,17 @@
+     end = std::chrono::high_resolution_clock::now();
+     double filter_vertices_time_in_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+ 
+-    
++    // [oex filter-only patch] Report the filter's result and stop: the time above, then each query
++    // vertex's final candidate count (a 0 means the filter refuted the pair). Printed after the timer.
++    printf("Filter vertices time (seconds): %.6lf\n", NANOSECTOSEC(filter_vertices_time_in_ns));
++    std::cout << "final_candidates_cnt:";
++    for (ui i = 0; i < query_graph->getVerticesCount(); ++i)
++        std::cout << candidates_count[i] << ",";
++    std::cout << std::endl;
++    std::cout << "FILTER ONLY: done" << std::endl;
++    return 0;
++
++
+ #ifdef OPTIMAL_CANDIDATES
+     std::vector<ui> optimal_candidates_count;
+     double avg_false_positive_ratio = FilterVertices::computeCandidatesFalsePositiveRatio(data_graph, query_graph, candidates,

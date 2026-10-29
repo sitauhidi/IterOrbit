@@ -167,6 +167,8 @@ originals on subgraphs of a given graph; its header comment gives the build line
   table or subsection, with its outputs. `analysis/analysis.py` is the same code as a script; the notebook is
   generated from it.
 - `analysis/build_data.py`: rebuilds `analysis/data/` from the experiments' logs (not part of this repository).
+- `slurm/`: the SLURM scripts that run IterOrbit's experiments and write those logs (see `slurm/README.md`).
+- `baseline/`: the patches the paper's comparison applied to the baselines' upstream sources (`subgraphmatching-mccreesh` and `-filteronly` for SubgraphMatchingSurvey `eb3ab43`, whose own candidate printing is left as upstream has it; `gup-timed` for GuP `fbaf103`), each applied with `patch -p1` to a copy of the checkout.
 
 ```bash
 pip install -r analysis/requirements.txt

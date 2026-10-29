@@ -1,0 +1,35 @@
+diff -ruN -x 'build*' -x '*.o' -x .git SubgraphMatchingSurvey/vlabel/configuration/config.h SubgraphMatchingSurvey-mccreesh/vlabel/configuration/config.h
+--- SubgraphMatchingSurvey/vlabel/configuration/config.h	2026-09-20 23:26:53.000000000 +0100
++++ SubgraphMatchingSurvey-mccreesh/vlabel/configuration/config.h	2026-10-02 07:40:45.000000000 +0100
+@@ -7,7 +7,7 @@
+ 
+ 
+ 
+-#define MAXIMUM_QUERY_GRAPH_SIZE 64
++#define MAXIMUM_QUERY_GRAPH_SIZE 1024
+ #define HASH_TABLE_RATIO 1.2
+ 
+ 
+diff -ruN -x 'build*' -x '*.o' -x .git SubgraphMatchingSurvey/vlabel/matching/EvaluateQuery.cpp SubgraphMatchingSurvey-mccreesh/vlabel/matching/EvaluateQuery.cpp
+--- SubgraphMatchingSurvey/vlabel/matching/EvaluateQuery.cpp	2026-09-20 23:26:53.000000000 +0100
++++ SubgraphMatchingSurvey-mccreesh/vlabel/matching/EvaluateQuery.cpp	2026-10-02 07:41:00.000000000 +0100
+@@ -2684,6 +2684,19 @@
+         std::cout << order[i] << ',';
+     }
+     std::cout << std::endl;
++    // [oex McCreesh patch] A query edge whose candidate relation is empty admits no embedding.
++    // The original code went on to convert_to_encoded_relation(), whose assert(edge_size > 0)
++    // aborted the process on exactly these instances instead of reporting 0 embeddings.
++    for (ui u = 0; u < query_graph->getVerticesCount(); ++u) {
++        ui nbr_cnt;
++        const VertexID* nbrs = query_graph->getVertexNeighbors(u, nbr_cnt);
++        for (ui j = 0; j < nbr_cnt; ++j) {
++            if (u < nbrs[j] && storage->edge_relations_[u][nbrs[j]].size_ == 0) {
++                std::cout << "empty edge relation (" << u << "," << nbrs[j] << "): 0 embeddings" << std::endl;
++                return 0;
++            }
++        }
++    }
+     convert_to_encoded_relation(storage, order);
+ #ifdef SPARSE_BITMAP
+     convert_encoded_relation_to_sparse_bitmap(storage, order);

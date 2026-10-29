@@ -13,7 +13,9 @@
 #
 # Conventions used throughout:
 # - **End-to-end time** is each system's own filter + order + enumerate timers, graph loading excluded, plus the
-#   build time of the indexes its filter reads (`with_index`), floored at 0.1 ms (`TIME_FLOOR_MS`).
+#   build time of the indexes its filter reads (`with_index`), amortised over the instances on each data graph
+#   that every compared system completed (`INDEX_CHARGE`; the end-to-end figures charge each run in full,
+#   `E2E_INDEX_CHARGE`), plus IterOrbit's symmetry breaking, floored at 0.1 ms (`TIME_FLOOR_MS`).
 # - **Speed-up** of IterOrbit over a system is the geometric mean of (system's time / IterOrbit's) over the
 #   instances both completed; "fastest" counts ties for every tied system.
 # - **Reduction** is measured against round 1's LDF + NLF + arc-consistency candidates.
@@ -88,11 +90,13 @@ LABEL = {"dblp": "DBLP", "eu2005": "EU2005", "youtube": "YouTube",
 BENCH = {"imsm": "Labelled", "mccreesh": "Unlabelled"}
 
 S = sns.color_palette("Set2")
+OKABE_ITO = {"orange": "#E69F00", "sky blue": "#56B4E9", "bluish green": "#009E73", "yellow": "#F0E442",
+             "blue": "#0072B2", "vermillion": "#D55E00", "reddish purple": "#CC79A7", "black": "#000000"}
 TOOLS = ["IterOrbit", "RM", "DP-iso", "VEQ", "CaLiG"]
-TOOL_COLOR = {"IterOrbit": S[1], "RM": S[0], "VEQ": S[2], "DP-iso": S[3], "CaLiG": S[4], "OrbitSI": S[5]}
-TOOL_MARKER = {"IterOrbit": "D", "RM": "s", "CaLiG": "^", "VEQ": "o", "DP-iso": "v", "OrbitSI": "P"}
+TOOL_COLOR = {"IterOrbit": S[1], "RM": S[0], "VEQ": S[2], "DP-iso": S[3], "CaLiG": S[4], "OrbitSI": S[5], "GraphQL": S[6]}
+TOOL_MARKER = {"IterOrbit": "D", "RM": "s", "CaLiG": "^", "VEQ": "o", "DP-iso": "v", "OrbitSI": "P", "GraphQL": "p"}
 PLOT_TOOLS = ["IterOrbit", "OrbitSI", "RM", "DP-iso", "VEQ", "CaLiG"]
-SHORT = {"IterOrbit": "IO", "OrbitSI": "OSI"}
+SHORT = {"IterOrbit": "IO", "OrbitSI": "OSI", "Glasgow": "GSS", "GraphQL": "GQL"}
 MODES = ["Baseline", "OrbitSI", "IterOrbit"]
 MODE_LABEL = {"Baseline": "Baseline", "OrbitSI": r"$\mathbf{I_{max}=1}$ (≈ OSI)",
               "IterOrbit": r"$\mathbf{I_{max}=0}$ (IO, to fixpoint)"}
@@ -185,6 +189,35 @@ def bench_grid(figsize, hspace=0.62, wspace=0.32, block_gap=0, **adjust):
         p = ax.get_position()
         ax.set_position([p.x0, p.y0 - block_gap, p.width, p.height])
     return fig, lab, unl
+
+
+def stack_rows(fig, rows, panel_in, gap_in=0.15, heading_in=None, top_in=0.0, bottom_in=0.05):
+    """Restacks rows of axes from the top in inches: every panel panel_in tall, each row's text (titles and
+    counts above, tick labels below) measured and kept clear of the next row, gap_in between rows and
+    heading_in[i] (or 0) of room above row i for a block heading; top_in of room above everything (a legend).
+    Resizes the figure to the stack's height, keeping its width."""
+    heading_in = heading_in or [0.0] * len(rows)
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    dpi = fig.dpi
+    over = []
+    for row in rows:
+        above = max((ax.get_tightbbox(r).y1 - ax.bbox.y1) / dpi for ax in row)
+        below = max((ax.bbox.y0 - ax.get_tightbbox(r).y0) / dpi for ax in row)
+        over.append((above, below))
+    y, tops = top_in, []
+    for i, (above, below) in enumerate(over):
+        y += heading_in[i] + above
+        tops.append(y)
+        y += panel_in + below + gap_in
+    height = y - gap_in + bottom_in
+    width = fig.get_size_inches()[0]
+    fig.set_size_inches(width, height)
+    for row, top in zip(rows, tops):
+        for ax in row:
+            p = ax.get_position()
+            ax.set_position([p.x0, 1 - (top + panel_in) / height, p.width, panel_in / height])
+    return height
 
 
 def equal_gaps(fig, axes, left, right, gap):
@@ -300,6 +333,11 @@ def mcc_filtering():
 # ---- end to end ---------------------------------------------------------------------------------------
 INCLUDE_LOADING = False   # end-to-end times leave graph loading out
 INCLUDE_INDEX = True      # ... and charge each filter's index build (with_index)
+E2E_INDEX_CHARGE = "per query"  # the end-to-end figures charge each run its whole index build
+INDEX_CHARGE = "amortised"  # "amortised": a data graph's index build shared by the instances on it that every
+                            # system completed; "per query": in full
+INCLUDE_SYMMETRY = True   # ... and IterOrbit's symmetry breaking (its own timer, between ordering and search;
+                          # the baselines and OrbitSI run none, the enumeration sweep has it off)
 TIME_FLOOR_MS = 0.1       # the baselines' framework prints seconds to four decimals
 
 
@@ -310,13 +348,15 @@ def imsm_phases(datasets=None):
     ox = ox[ox.status == "COMPLETED"]
     a = pd.DataFrame({"tool": "IterOrbit", "dataset": ox.dataset, "pattern_name": ox.pattern_name,
                       "read": ox.load_time_ms, "filter": ox.filter_time_ms,
-                      "order": ox.order_time_us.fillna(0) / 1000.0, "enumerate": ox.search_time_ms.fillna(0)})
+                      "order": ox.order_time_us.fillna(0) / 1000.0, "symmetry": ox.symmetry_time_ms.fillna(0),
+                      "enumerate": ox.search_time_ms.fillna(0)})
     s = csv("labelled_sota_runs.csv")
     s = s[s.status == "COMPLETED"]
     b = pd.DataFrame({"tool": s.tool.map({"rapidmatch": "RM", "dpiso": "DP-iso", "veq": "VEQ", "calig": "CaLiG"}),
                       "dataset": s.dataset, "pattern_name": s.pattern_name,
                       "read": s.load_graphs_time_s * 1e3, "filter": s.filter_vertices_time_s * 1e3,
                       "order": s.generate_query_plan_time_s * 1e3,
+                      "symmetry": 0.0,
                       "enumerate": (s.build_table_time_s.fillna(0) + s.enumerate_time_s.fillna(0)) * 1e3})
     d = pd.concat([a, b], ignore_index=True)
     return d[d.dataset.isin(IMSM if datasets is None else datasets)].dropna(subset=["read", "filter"])
@@ -329,19 +369,26 @@ def mcc_phases():
     d = d[d.tool.isin(TOOLS)]
     return pd.DataFrame({"tool": d.tool, "dataset": d.dataset, "pattern_name": d.pattern_name,
                          "read": d.read_ms, "filter": d.filter_ms, "order": d.order_ms.fillna(0),
+                         "symmetry": d.symmetry_ms.fillna(0),
                          "enumerate": d.enumerate_ms.fillna(0)}).dropna(subset=["read", "filter"])
 
 
 def phase_time(d):
     t = d["filter"] + d["order"] + d["enumerate"]
+    if INCLUDE_SYMMETRY and "symmetry" in d:
+        t = t + d["symmetry"].fillna(0)
     if INCLUDE_INDEX and "index" in d:
         t = t + d["index"]
     return (t + d["read"] if INCLUDE_LOADING else t).clip(lower=TIME_FLOOR_MS)
 
 
-def with_index(d, bench):
+def with_index(d, bench, charge=None):
     """d (a phase frame of one benchmark) with an "index" column (ms): the build time of the indexes the
-    tool's filter reads on that instance's data graph; 0 for IterOrbit; GuP's own index_ms."""
+    tool's filter reads on that instance's data graph; for IterOrbit its label index where the run built one
+    (label_index, the enumeration sweep), else 0 (its filter counts labels itself); GuP's own index_ms.
+    Under INDEX_CHARGE "amortised" each build is divided by the number of instances on that data graph that
+    every system in d completed (on a labelled graph, the panels' n); "index_full" keeps the whole build.
+    `charge` overrides INDEX_CHARGE (the end-to-end figures charge "per query")."""
     ix = csv("index_build_times.csv")
     ix = ix[ix.bench == bench].set_index("graph")
     if bench == "imsm":
@@ -352,8 +399,20 @@ def with_index(d, bench):
         graph = pd.Series([target[k] for k in zip(d.dataset, d.pattern_name)], index=d.index)
     col = np.where(d.tool == "OrbitSI", "orbitsi_used_ms", "framework_used_ms")
     used = np.array([ix.at[g, c] for g, c in zip(graph, col)])
+    io = np.array([ix.at[g, "iterorbit_used_ms"] for g in graph])
+    io = np.where(d.label_index.fillna(False).astype(bool), io, 0.0) if "label_index" in d else np.zeros(len(d))
     gup = d.index_ms.to_numpy() if "index_ms" in d else np.full(len(d), np.nan)
-    return d.assign(index=np.select([d.tool == "IterOrbit", d.tool == "GuP"], [0.0, gup], used))
+    full = np.select([d.tool == "IterOrbit", d.tool == "GuP"], [io, gup], used)
+    share = 1.0
+    if (charge or INDEX_CHARGE) == "amortised":
+        # each data graph's indexes built once, for the instances on that graph that every system in d
+        # completed (the panels' n); a graph with none is charged in full
+        keys = all_completed(d, list(d.tool.unique()))
+        on_graph = pd.Series(graph.to_numpy(), index=pd.MultiIndex.from_arrays([d.dataset, d.pattern_name]))
+        on_graph = on_graph[~on_graph.index.duplicated()]
+        n = on_graph[on_graph.index.isin(keys)].value_counts()
+        share = 1.0 / graph.map(n).fillna(1.0).to_numpy()
+    return d.assign(index=full * share, index_full=full)
 
 
 def all_completed(d, tools=TOOLS):
@@ -464,13 +523,44 @@ def glasgow_runs():
     return g.set_index(["dataset", "pattern_name"])
 
 
+GRAPHQL = "GraphQL"
+
+
+def graphql_phases(bench, sweep):
+    """GraphQL's completed runs of one sweep ("count" or "enum") in the frame of imsm_phases(), or None until
+    every instance of the benchmark has a final status (its sweep is complete)."""
+    g = csv("graphql_runs.csv")
+    g = g[(g.bench == bench) & (g.sweep == sweep)]
+    final = g[g.status.isin(["COMPLETED", "TIMEOUT", "ERROR"])]
+    if final[["dataset", "pattern_name"]].drop_duplicates().shape[0] < len(instance_keys(bench)):
+        return None
+    g = g[g.status == "COMPLETED"]
+    return pd.DataFrame({"tool": GRAPHQL, "dataset": g.dataset, "pattern_name": g.pattern_name, "read": g.read_ms,
+                         "filter": g.filter_ms, "order": g.order_ms.fillna(0), "symmetry": 0.0,
+                         "enumerate": g.build_table_ms.fillna(0) + g.enumerate_ms.fillna(0)})
+
+
+def graphql_filter(bench):
+    """GraphQL's filter-only runs on one benchmark: dataset, pattern_name, status, cost_ms (its timed filter), cand
+    (mean candidates per pattern vertex, 0 when refuted), refuted; None until every instance has a final status."""
+    g = csv("graphql_runs.csv")
+    g = g[(g.bench == bench) & (g.sweep == "filter")]
+    final = g[g.status.isin(["COMPLETED", "TIMEOUT", "ERROR"])]
+    if final[["dataset", "pattern_name"]].drop_duplicates().shape[0] < len(instance_keys(bench)):
+        return None
+    return pd.DataFrame({"dataset": g.dataset, "pattern_name": g.pattern_name, "status": g.status,
+                         "cost_ms": g.filter_ms, "cand": g.avg_candidates,
+                         "refuted": g.refuted.astype("boolean").fillna(False).astype(bool)})
+
+
 # ---- tool order in the figures ------------------------------------------------------------------------
 _ORDER = None
 
 
 def plot_tool_order():
-    """PLOT_TOOLS sorted by overall end-to-end time, slowest first: each tool's geometric mean over the
-    instances all six completed, both benchmarks pooled."""
+    """PLOT_TOOLS with OrbitSI and IterOrbit last (in that order), the others sorted by overall end-to-end
+    time, slowest first: each tool's geometric mean over the instances all six completed, both benchmarks
+    pooled."""
     global _ORDER
     if _ORDER is None:
         frames = []
@@ -480,7 +570,8 @@ def plot_tool_order():
             frames.append(d[[k in keys for k in zip(d.dataset, d.pattern_name)]])
         d = pd.concat(frames, ignore_index=True).assign(t=lambda f: phase_time(f))
         g = {t: gmean(d[d.tool == t].t, TIME_FLOOR_MS) for t in PLOT_TOOLS}
-        _ORDER = sorted(PLOT_TOOLS, key=g.get, reverse=True)
+        last = ["OrbitSI", "IterOrbit"]
+        _ORDER = sorted((t for t in PLOT_TOOLS if t not in last), key=g.get, reverse=True) + last
         print("tool order (overall geo ms): " + ", ".join(f"{t} {g[t]:.3g}" for t in _ORDER))
     return _ORDER
 
@@ -654,6 +745,12 @@ def fig_filter_tradeoff():
              "mccreesh": ["LV", "images-CVIU11", "scalefree", "si"]}
     MODES2 = ["OrbitSI", "IterOrbit"]
     Z = 1.96
+    # markers as in sota_filter.pdf: hollow, in the cactus plots' darker Dark2 colours (I_max=1 ~ OrbitSI's,
+    # the fixpoint IterOrbit's), with its marker size, edge width and confidence bars
+    D = sns.color_palette("Dark2")
+    COLOR = {"OrbitSI": D[5], "IterOrbit": D[1]}
+    MS, EDGE = 10, 2.2
+    CI_ALPHA, CI_WIDTH, CI_CAP = 0.8, 1.4, 3
 
     def tick(v, _):
         return f"{v / 1000:g}k" if v >= 1000 else f"{v:g}"
@@ -667,13 +764,14 @@ def fig_filter_tradeoff():
         m["x1"], m["x3"] = m.x / np.exp(m.lse), m.x * np.exp(m.lse)
         m["y1"], m["y3"] = m.y - m.yse, m.y + m.yse
         for _, r in m.iterrows():
-            col, ls = MODE_COLOR[r["mode"]], SIZE_LINESTYLE[r.graphlet_size]
+            col, ls = COLOR[r["mode"]], SIZE_LINESTYLE[r.graphlet_size]
             _, _, bars = ax.errorbar(r.x, r.y, xerr=[[r.x - r.x1], [r.x3 - r.x]], yerr=[[r.y - r.y1], [r.y3 - r.y]],
-                                     fmt="none", ecolor=col, elinewidth=1.1, capsize=2, capthick=1.1, alpha=0.8, zorder=2)
+                                     fmt="none", ecolor=col, elinewidth=CI_WIDTH, capsize=CI_CAP, capthick=CI_WIDTH,
+                                     alpha=CI_ALPHA, zorder=2)
             for b in bars:
                 b.set_linestyle(ls)
-            ax.plot(r.x, r.y, marker=SIZE_MARKER[r.graphlet_size], markersize=7, markerfacecolor="none",
-                    markeredgecolor=col, markeredgewidth=1.5, linestyle="none", zorder=3)
+            ax.plot(r.x, r.y, marker=SIZE_MARKER[r.graphlet_size], markersize=MS, markerfacecolor="none",
+                    markeredgecolor=col, markeredgewidth=EDGE, linestyle="none", zorder=3)
         ax.set_xscale("log")
         lo, hi = min(0.0, m.y1.min()), max(m.y.max(), m.y3.max())
         span = max(hi - lo, 1.0)
@@ -712,10 +810,10 @@ def fig_filter_tradeoff():
     block_heading(fig, axes[4:], "Unlabelled", fontsize=12)
     shared_ylabel(fig, axes, "Mean reduction (%)")
     shared_xlabel(fig, axes, "Total filtering time (ms, log scale)")
-    mode_h = [plt.Line2D([0], [0], marker="o", linestyle="none", markersize=8, markerfacecolor="none",
-                         markeredgecolor=MODE_COLOR[m], markeredgewidth=1.6, label=MODE_LABEL[m]) for m in MODES2]
-    size_h = [plt.Line2D([0], [0], marker=SIZE_MARKER[s], linestyle=SIZE_LINESTYLE[s], color="black", markersize=8,
-                         markerfacecolor="none", markeredgecolor="black", markeredgewidth=1.6, label=f"K{s}") for s in SIZES]
+    mode_h = [plt.Line2D([0], [0], marker="o", linestyle="none", markersize=9, markerfacecolor="none",
+                         markeredgecolor=COLOR[m], markeredgewidth=EDGE, label=MODE_LABEL[m]) for m in MODES2]
+    size_h = [plt.Line2D([0], [0], marker=SIZE_MARKER[s], linestyle=SIZE_LINESTYLE[s], color="black", markersize=9,
+                         markerfacecolor="none", markeredgecolor="black", markeredgewidth=EDGE, label=f"K{s}") for s in SIZES]
     leg = fig.legend(handles=mode_h, bbox_to_anchor=(0.5, 0.975), loc="center", ncol=2, frameon=False,
                      columnspacing=1.0, handletextpad=0.2)
     for t in leg.get_texts():
@@ -814,12 +912,17 @@ fig_iteration_gain()
 # %% [markdown]
 # ### Figure `refutation.pdf`
 # Unsatisfiable unlabelled pairs proved so by filtering alone (LV, Images, Meshes; Scalefree and SI pairs all
-# have embeddings).
+# have embeddings): IterOrbit (g=5 to the fixpoint, its configuration here), OrbitSI, RapidMatch, DP-iso, VEQ and
+# CaLiG, and Glasgow before any search (its decision runs with 0 search nodes). DP-iso's refutations come from its
+# filter-only run (its end-to-end build prints no candidate sets on this benchmark).
 
 # %%
 def fig_refutation():
     setup(7.2)
     FAMILIES = ["LV", "images-CVIU11", "meshes-CVIU11"]
+    OTHERS = ["OrbitSI", "RM", "DP-iso", "VEQ", "CaLiG"]
+    OTHER_HATCH = {"OrbitSI": "..", "RM": "//", "DP-iso": "\\\\", "VEQ": "--", "CaLiG": "||", GRAPHQL: "O"}
+    gqf = graphql_filter("mccreesh")
     d = mcc_filtering()
     gt = csv("unlabelled_glasgow_ground_truth.csv", dtype={"glasgow_status": str})
     unsat = gt[gt.glasgow_status.astype(str).str.lower() == "false"]
@@ -828,42 +931,52 @@ def fig_refutation():
     ref = d[d.outcome == "refuted"]
     assert all(k in unsat_keys for k in zip(ref.dataset, ref.pattern_name)), "a refuted pair is satisfiable"
     osi = orbitsi_filter("mccreesh")
-    osi_ref = osi[osi.refuted]
-    assert all(k in unsat_keys for k in zip(osi_ref.dataset, osi_ref.pattern_name)), "OrbitSI refutes a satisfiable pair"
     print(f"OrbitSI filter finished {len(osi)}/480 pairs")
+    s = csv("unlabelled_sota_filter_candidates.csv")
+    other_ref = pd.concat([osi[osi.refuted].assign(tool="OrbitSI")[["tool", "dataset", "pattern_name"]],
+                           s[s.refuted == True][["tool", "dataset", "pattern_name"]]], ignore_index=True)   # noqa: E712
+    if gqf is not None:
+        print(f"GraphQL filter finished {int((gqf.status == 'COMPLETED').sum())}/480 pairs")
+        other_ref = pd.concat([other_ref, gqf[gqf.refuted].assign(tool=GRAPHQL)[["tool", "dataset", "pattern_name"]]],
+                              ignore_index=True)
+    bad = [k for k in zip(other_ref.tool, other_ref.dataset, other_ref.pattern_name) if k[1:] not in unsat_keys]
+    assert not bad, f"refuted pairs that are satisfiable: {bad[:5]}"
 
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 4.4), sharey=True)
-    width = 0.36
-    MODES2 = ["OrbitSI", "IterOrbit"]
+    # IterOrbit's end-to-end configuration on this benchmark: g=5 to the fixpoint
+    io = ref[(ref["mode"] == "IterOrbit") & (ref.graphlet_size == 5)].assign(tool="IterOrbit")
+    other_ref = pd.concat([other_ref, io[["tool", "dataset", "pattern_name"]]], ignore_index=True)
+    # Glasgow has no separate filter: count the pairs it proves unsatisfiable before any search (nodes = 0, i.e.
+    # its domain initialisation and root propagation fail; it counts the root as the first node)
+    gl = unsat[unsat.glasgow_nodes == 0].assign(tool="Glasgow")
+    other_ref = pd.concat([other_ref, gl[["tool", "dataset", "pattern_name"]]], ignore_index=True)
+    systems = [t for t in plot_tool_order() if t in OTHERS]
+    systems = systems[:-1] + ([GRAPHQL] if gqf is not None else []) + ["Glasgow", "OrbitSI", "IterOrbit"]   # OrbitSI, IterOrbit last
+    hatch = {**OTHER_HATCH, "IterOrbit": "xx", "Glasgow": "++"}
+    color = {**TOOL_COLOR, "Glasgow": S[7]}
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 3.0), sharey=True)
+    xs = np.arange(len(systems))
     for ax, fam in zip(axes, FAMILIES):
         n = int(n_unsat[fam])
         r = ref[ref.dataset == fam]
         cheap = 100.0 * r[r.cheap_refuted].pattern_name.nunique() / n
         print(f"{fam}: {n} unsatisfiable; cheap filters refute {cheap:.0f}%")
-        for j, mode in enumerate(MODES2):
-            xs = np.arange(len(SIZES)) + (j - 0.5) * width
-            vals = [100.0 * r[(r["mode"] == mode) & (r.graphlet_size == g)].pattern_name.nunique() / n for g in SIZES]
-            print(f"  {mode:9s} " + " ".join(f"K{g} {v:5.1f}%" for g, v in zip(SIZES, vals)))
-            ax.bar(xs, vals, width=width, color=MODE_COLOR[mode], edgecolor="black", linewidth=1.5,
-                   hatch=MODE_HATCH[mode], zorder=2)
+        for x, t in zip(xs, systems):
+            v = 100.0 * other_ref[(other_ref.tool == t) & (other_ref.dataset == fam)].pattern_name.nunique() / n
+            print(f"  {t:9s} {v:5.1f}%")
+            ax.bar(x, v, width=0.7, color=color[t], edgecolor="black", linewidth=1.5, hatch=hatch[t], zorder=2)
         ax.axhline(cheap, color="black", linestyle="--", linewidth=1.5, zorder=3)
-        o = 100.0 * osi_ref[osi_ref.dataset == fam].pattern_name.nunique() / n
-        print(f"  OrbitSI   {o:5.1f}%")
-        ax.axhline(o, color=TOOL_COLOR["OrbitSI"], linestyle=":", linewidth=2.2, zorder=3)
-        ax.set_xticks(range(len(SIZES)))
-        ax.set_xticklabels([f"K{g}" for g in SIZES])
+        ax.set_xticks(xs)
+        ax.set_xticklabels([SHORT.get(t, t) for t in systems], rotation=90)
         ax.set_ylim(0, 108)
-        style_axis(ax, f"{LABEL[fam]}\n({n} unsat.)")
+        ax.set_yticks([0, 50, 100])
+        style_axis(ax, f"{LABEL[fam]} (n={n})")
+        ax.title.set_fontsize(fs(9.5))
     for ax in axes[1:]:
         ax.tick_params(labelleft=False)
-    axes[0].set_ylabel("Pairs refuted (%)", fontweight="bold", fontsize=fs(11))
-    fig.subplots_adjust(top=0.7, bottom=0.08, left=0.14, right=0.995, wspace=0.12)
-    handles = [plt.Rectangle((0, 0), 1, 1, facecolor=MODE_COLOR[m], edgecolor="black", linewidth=1.5,
-                             hatch=MODE_HATCH[m], label=MODE_LABEL_PLAIN[m]) for m in MODES2]
-    lines = [plt.Line2D([0], [0], color="black", linestyle="--", linewidth=1.5, label="LDF+NLF+AC"),
-             plt.Line2D([0], [0], color=TOOL_COLOR["OrbitSI"], linestyle=":", linewidth=2.2, label="OrbitSI")]
-    fig.add_artist(legend_row(fig, "Mode:", handles, 0.965, columnspacing=1.0, handletextpad=0.4, handlelength=1.8))
-    legend_row(fig, "Refuted by:", lines, 0.9, columnspacing=1.0, handletextpad=0.4, handlelength=1.8)
+    axes[0].set_ylabel("Unsat. pairs\nrefuted (%)", fontweight="bold", fontsize=fs(11))
+    fig.subplots_adjust(top=0.79, bottom=0.22, left=0.115, right=0.99, wspace=0.17)
+    lines = [plt.Line2D([0], [0], color="black", linestyle="--", linewidth=1.5, label="LDF+NLF+AC")]
+    legend_row(fig, "Refuted by:", lines, 0.965, columnspacing=1.0, handletextpad=0.4, handlelength=1.8)
     save(fig, "refutation")
 
 
@@ -959,7 +1072,7 @@ def index_amortised():
     SCALES = (("charged", 1.0), ("shared by 100 patterns", 0.01), ("fully amortised", 0.0))
 
     def pivot(d0, scale):
-        d = d0.assign(index=d0["index"] * scale)
+        d = d0.assign(index=d0["index_full"] * scale)
         d["t"] = phase_time(d)
         return d.pivot_table(index=["dataset", "pattern_name"], columns="tool", values="t", aggfunc="first").reindex(columns=SIX)
 
@@ -982,8 +1095,8 @@ def index_amortised():
             print(f"  {name:24s} {summary(tabs[name])}")
         if bench != "imsm":
             continue
-        rm = d0[d0.tool == "RM"].assign(t=lambda x: x["filter"] + x["order"] + x["enumerate"] + x["index"])
-        share = (rm["index"] / rm["t"]).groupby(rm.dataset).median()
+        rm = d0[d0.tool == "RM"].assign(t=lambda x: x["filter"] + x["order"] + x["enumerate"] + x["index_full"])
+        share = (rm["index_full"] / rm["t"]).groupby(rm.dataset).median()
         print("  per dataset (index share of RM's time, median):")
         for ds in datasets:
             print(f"   {LABEL[ds]:9s} {100 * share[ds]:3.0f}%")
@@ -1001,10 +1114,25 @@ index_amortised();
 # %%
 CACTUS_D = sns.color_palette("Dark2")
 CACTUS_COLOR = {"IterOrbit": CACTUS_D[1], "RM": CACTUS_D[0], "VEQ": CACTUS_D[2], "DP-iso": CACTUS_D[3], "CaLiG": CACTUS_D[4],
-                "OrbitSI": CACTUS_D[5], "Glasgow": CACTUS_D[7], "GuP": CACTUS_D[6]}
+                "OrbitSI": CACTUS_D[5], "Glasgow": CACTUS_D[7], "GuP": CACTUS_D[6],
+                "GraphQL": "#1f78b4"}   # all eight Dark2 colours are taken: ColorBrewer's dark blue (Dark2 has no blue)
 CACTUS_MARKER = {**TOOL_MARKER, "Glasgow": "X", "GuP": "h"}
-CACTUS_LINE_WIDTH = {"IterOrbit": 3.4}
-CACTUS_DEFAULT_WIDTH = 2.2
+
+
+def place_by_gmean(order, tool, t):
+    """order with tool inserted by geometric mean over the rows of t (instances x systems, every column of order +
+    [tool] present) that all of them completed, slowest first, the last two (OrbitSI, IterOrbit) kept last."""
+    t = t[[c for c in order + [tool] if c in t.columns]].dropna()
+    g = {c: gmean(t[c]) for c in t.columns}
+    i = min(next((k for k, c in enumerate(order) if c in g and g[c] < g[tool]), len(order)), len(order) - 2)
+    print(f"legend: {tool} placed by {len(t)} instances all completed: " + ", ".join(f"{c} {g[c]:.3g}" for c in t.columns))
+    return order[:i] + [tool] + order[i:]
+CACTUS_LINE_WIDTH = {"IterOrbit": 2.6}
+CACTUS_DEFAULT_WIDTH = 1.5
+# IterOrbit solid; every other system thinner, with its own dash pattern
+CACTUS_LINE_STYLE = {"IterOrbit": "solid", "RM": (0, (6, 2)), "DP-iso": (0, (2, 1.5)), "VEQ": (0, (6, 2, 1.5, 2)),
+                     "CaLiG": (0, (3, 1.5)), "OrbitSI": (0, (6, 1.5, 1.5, 1.5, 1.5, 1.5)), "Glasgow": (0, (1, 1)),
+                     "GuP": (0, (9, 2)), "GraphQL": (0, (4, 1.5, 1, 1.5))}
 CACTUS_N_MARKERS = 8
 
 
@@ -1012,7 +1140,7 @@ def _cactus_line(ax, t, y):
     ax.plot(np.arange(1, len(y) + 1), y, color=CACTUS_COLOR[t], marker=CACTUS_MARKER[t],
             markevery=np.unique(np.linspace(0, len(y) - 1, CACTUS_N_MARKERS).astype(int)).tolist(),
             markerfacecolor="none", markeredgecolor=CACTUS_COLOR[t], markeredgewidth=1.5,
-            markersize=8, linewidth=CACTUS_LINE_WIDTH.get(t, CACTUS_DEFAULT_WIDTH), linestyle="solid",
+            markersize=8, linewidth=CACTUS_LINE_WIDTH.get(t, CACTUS_DEFAULT_WIDTH), linestyle=CACTUS_LINE_STYLE[t],
             zorder=3 if t == "IterOrbit" else 2, label=SHORT.get(t, t))
 
 
@@ -1032,7 +1160,8 @@ def _cactus_finish(fig, axes, order, name):
     axes[1].set_xlabel("Instances completed", fontweight="bold", fontsize=fs(12))
     handles = [plt.Line2D([0], [0], color=CACTUS_COLOR[t], marker=CACTUS_MARKER[t], markerfacecolor="none",
                           markeredgecolor=CACTUS_COLOR[t], markeredgewidth=1.5, markersize=8,
-                          linewidth=CACTUS_LINE_WIDTH.get(t, CACTUS_DEFAULT_WIDTH), label=SHORT.get(t, t)) for t in order]
+                          linewidth=CACTUS_LINE_WIDTH.get(t, CACTUS_DEFAULT_WIDTH), linestyle=CACTUS_LINE_STYLE[t],
+                          label=SHORT.get(t, t)) for t in order]
     fig.canvas.draw()
     r = fig.canvas.get_renderer()
     inv = fig.transFigure.inverted()
@@ -1043,7 +1172,7 @@ def _cactus_finish(fig, axes, order, name):
     for row, y in ((handles[:4], 0.976), (handles[4:], 0.926)):
         leg = fig.legend(handles=row, bbox_to_anchor=((top.x0 + top.x1) / 2, y), loc="center",
                          ncol=len(row), frameon=False, borderpad=0, borderaxespad=0,
-                         columnspacing=0.8, handletextpad=0.3, handlelength=1.8)
+                         columnspacing=0.8, handletextpad=0.3, handlelength=2.6)
         for text in leg.get_texts():
             text.set_fontweight("bold")
             text.set_fontsize(fs(10))
@@ -1068,16 +1197,19 @@ def fig_cactus():
         t[GLASGOW] = glasgow.reindex(t.index)
         t = t.dropna().clip(lower=FLOOR)
         gm = {c: gmean(t[c]) for c in t.columns}
-        i = next((k for k, c in enumerate(order) if gm[c] < gm[GLASGOW]), len(order))
+        i = min(next((k for k, c in enumerate(order) if gm[c] < gm[GLASGOW]), len(order)), len(order) - 2)
         print(f"legend: Glasgow placed by {len(t)} pairs all seven completed: " + ", ".join(f"{c} {gm[c]:.3g}" for c in t.columns))
         return order[:i] + [GLASGOW] + order[i:]
 
     fig, axes = plt.subplots(2, 1, figsize=(7.4, 6.2))
+    pooled = []
     for ax, (bench, loader, datasets) in zip(axes, [("imsm", lambda: imsm_phases(PLOT_IMSM), PLOT_IMSM),
                                                      ("mccreesh", mcc_phases, MCC)]):
-        d = with_index(pd.concat([loader(), orbitsi_phases(bench)], ignore_index=True), bench)
+        frames = [loader(), orbitsi_phases(bench), graphql_phases(bench, "count")]
+        d = with_index(pd.concat([f for f in frames if f is not None], ignore_index=True), bench, charge=E2E_INDEX_CHARGE)
         sub = d[d.dataset.isin(datasets)]
-        series = {t: np.sort(phase_time(sub[sub.tool == t]).to_numpy()) for t in plot_tool_order()}
+        pooled.append(sub.assign(bench=bench))
+        series = {t: np.sort(phase_time(sub[sub.tool == t]).to_numpy()) for t in plot_tool_order() + [GRAPHQL]}
         if bench == "mccreesh":
             series[GLASGOW] = np.sort(glasgow.to_numpy())
         done = {}
@@ -1093,6 +1225,11 @@ def fig_cactus():
             order = legend_order(sub)
         ax.set_xlim(0, 500)
         ax.xaxis.set_major_locator(mticker.MultipleLocator(100))
+    if all(len(p[p.tool == GRAPHQL]) for p in pooled):
+        x = pd.concat(pooled, ignore_index=True)
+        x["t"] = phase_time(x)
+        order = place_by_gmean(order, GRAPHQL, x.pivot_table(index=["bench", "dataset", "pattern_name"], columns="tool",
+                                                              values="t", aggfunc="first"))
     _cactus_finish(fig, axes, order, "cactus")
 
 
@@ -1100,67 +1237,119 @@ fig_cactus()
 
 # %% [markdown]
 # ### Figures `e2e_phases.pdf` (counting) and `e2e_phases_enum.pdf` (enumeration)
-# Geometric-mean time per dataset and system over the instances all systems completed, with 95% bootstrap
-# intervals, each bar divided by the system's mean share of time per phase. Above each panel: the instances on
-# which each system is the fastest (leaders bold and underlined); in each x label: the instances it completed
-# (the most completed in bold). `e2e_phases_enum.pdf` is not in the paper.
+# Shifted geometric-mean time per dataset and system (shift `SGM_SHIFT_MS`, 10 s), over the instances some system
+# in the row solved, an unsolved one counted at the time limit, with 95% bootstrap intervals. Each bar is divided
+# exactly in log space: log((SGM + s) / s) is the mean of log(1 + t_i / s) over the instances, each solved
+# instance's term split by its phases' shares of its time, each unsolved one's term going to "Unsolved".
+# Above each panel: the instances on which each system is the fastest (leaders bold; rotated in
+# `e2e_phases_enum.pdf` to fit seven or eight bars in one row); in each x label: the instances it completed (the
+# most completed in bold). GraphQL is in a row once its sweep on that benchmark is complete (graphql_phases). GuP's
+# rejected unlabelled pairs (patterns over 256 vertices) count as unsolved for it.
+# `e2e_phases_enum.pdf` is not in the paper.
 
 # %%
+SGM_SHIFT_MS = 10_000.0      # shifted geometric mean: the shift (MIP benchmarking's usual 10 s)
+TIME_LIMIT_MS = 1_800_000.0  # every end-to-end run's limit; an unsolved instance counts as this
+
+
+def sgm(t, shift=SGM_SHIFT_MS):
+    """Shifted geometric mean of times t (ms; NaN = unsolved, counted at TIME_LIMIT_MS)."""
+    t = np.asarray(pd.Series(t).fillna(TIME_LIMIT_MS), dtype=float)
+    return float(np.exp(np.log(t + shift).mean()) - shift)
+
+
 def fig_e2e_phases(enum=False):
     N_BOOT = 2000
-    PHASES = ((["read"] if INCLUDE_LOADING else []) + (["index"] if INCLUDE_INDEX else []) + ["filter", "order", "enumerate"])
-    PHASE_LABEL = {"read": "Read", "index": "Index", "filter": "Filter", "order": "Order", "enumerate": "Enumerate"}
-    PHASE_COLOR = {"filter": S[0], "order": S[1], "enumerate": S[2], "index": S[6], "read": S[7]}
-    PHASE_HATCH = {"filter": "//", "order": "xx", "enumerate": "\\\\", "index": "O", "read": "--"}
+    PHASES = ((["read"] if INCLUDE_LOADING else []) + (["index"] if INCLUDE_INDEX else []) + ["filter", "order"]
+              + (["symmetry"] if INCLUDE_SYMMETRY and not enum else []) + ["enumerate"])
+    SEGMENTS = PHASES + ["unsolved"]
+    PHASE_LABEL = {"read": "Read", "index": "Index", "filter": "Filter", "order": "Order", "symmetry": "Symmetry",
+                   "enumerate": "Enumerate", "unsolved": "Unsolved (at limit)"}
+    # Okabe-Ito (colour-blind safe); dark blue only for Read, which is off by default (hatching barely shows on it)
+    PHASE_COLOR = {"filter": OKABE_ITO["bluish green"], "order": OKABE_ITO["vermillion"], "symmetry": OKABE_ITO["yellow"],
+                   "enumerate": OKABE_ITO["sky blue"], "index": OKABE_ITO["reddish purple"], "read": OKABE_ITO["blue"],
+                   "unsolved": OKABE_ITO["orange"]}
+    PHASE_HATCH = {"filter": "//", "order": "xx", "symmetry": "..", "enumerate": "\\\\", "index": "O", "read": "--",
+                   "unsolved": "++"}
     setup(13.5, TEXT_IN)
-    underlined = []
-    COUNT_SIZE = 9
-    COUNT_ROW_PT = fs(9)
-    TITLE_PAD_PT = fs(19)
+    XTICK_SIZE = 10
+    PANEL_IN = 1.25         # drawn height of every panel's plot area (the figure is 13.5 in wide)
+    LEGEND_IN = 0.55        # drawn room above the panels for the legend
+    HEADING_IN = 0.42       # drawn room for "Labelled" / "Unlabelled"
     rng = np.random.default_rng(0)
     GUP = "GuP"
-    tools = PLOT_TOOLS + ([GUP] if enum else [])
-    stagger = 0.0
     if enum:
-        stagger = fs(10)
-        TITLE_PAD_PT += stagger
         enum_data = csv("enum_e2e.csv")
         enum_data = enum_data[enum_data.status == "COMPLETED"]
-
-    def bar_order():
-        order = plot_tool_order()
-        if not enum:
-            return order
-        x = pd.concat([with_index(enum_data[enum_data.bench == b], b) for b in ("imsm", "mccreesh")])
-        x["t"] = phase_time(x)
-        t = x.pivot_table(index=["bench", "dataset", "pattern_name"], columns="tool", values="t", aggfunc="first")[order + [GUP]].dropna()
-        g = {c: gmean(t[c]) for c in t.columns}
-        i = next((k for k, c in enumerate(order) if g[c] < g[GUP]), len(order))
-        return order[:i] + [GUP] + order[i:]
+    sweep = "enum" if enum else "count"
+    gql = {b: graphql_phases(b, sweep) for b in ("imsm", "mccreesh")}
 
     def load(bench):
         if enum:
-            return with_index(enum_data[enum_data.bench == bench].copy(), bench)
-        loader = (lambda: imsm_phases(PLOT_IMSM)) if bench == "imsm" else mcc_phases
-        return with_index(pd.concat([loader(), orbitsi_phases(bench)], ignore_index=True), bench)
+            d = enum_data[enum_data.bench == bench].copy()
+        else:
+            loader = (lambda: imsm_phases(PLOT_IMSM)) if bench == "imsm" else mcc_phases
+            d = pd.concat([loader(), orbitsi_phases(bench)], ignore_index=True)
+        if gql[bench] is not None:
+            d = pd.concat([d, gql[bench]], ignore_index=True)
+        return with_index(d, bench, charge=E2E_INDEX_CHARGE)
 
-    ORDER = bar_order()
+    def universe(bench):
+        """The instances a row's bars average over: every instance of the benchmark. The unlabelled pairs GuP
+        rejects (patterns over 256 vertices) count as unsolved for it."""
+        return set(instance_keys(bench))
 
-    def summarise(d, keys, ds):
-        sub = d[d.dataset == ds]
-        sub = sub[[k in keys for k in zip(sub.dataset, sub.pattern_name)]]
+    def insert(order, tool, bench):
+        """order with tool placed by its geometric mean over the instances all of order + [tool] completed (as
+        the order itself, slowest first), OrbitSI and IterOrbit kept last."""
+        x = load(bench)
+        x["t"] = phase_time(x)
+        t = x.pivot_table(index=["dataset", "pattern_name"], columns="tool", values="t", aggfunc="first")
+        t = t.reindex(columns=[c for c in order + [tool] if c in t.columns]).dropna()
+        g = {c: gmean(t[c]) for c in t.columns}
+        i = min(next((k for k, c in enumerate(order) if c in g and g[c] < g[tool]), len(order)), len(order) - 2)
+        return order[:i] + [tool] + order[i:]
+
+    def bar_order(bench):
+        order = list(plot_tool_order())
+        if enum:
+            x = pd.concat([with_index(enum_data[enum_data.bench == b], b, charge=E2E_INDEX_CHARGE) for b in ("imsm", "mccreesh")])
+            x["t"] = phase_time(x)
+            t = x.pivot_table(index=["bench", "dataset", "pattern_name"], columns="tool", values="t", aggfunc="first")[order + [GUP]].dropna()
+            g = {c: gmean(t[c]) for c in t.columns}
+            i = min(next((k for k, c in enumerate(order) if g[c] < g[GUP]), len(order)), len(order) - 2)
+            order = order[:i] + [GUP] + order[i:]
+        if gql[bench] is not None:
+            order = insert(order, GRAPHQL, bench)
+        return order
+
+    def summarise(d, keys, ds, tools):
+        """Per tool: (SGM, CI low, CI high, segment shares, n) over the instances of keys on ds that some tool solved."""
+        x = d[d.dataset == ds].assign(t=lambda f: phase_time(f))
+        names = sorted(p for k, p in keys if k == ds)
+        t = x.pivot_table(index="pattern_name", columns="tool", values="t", aggfunc="first").reindex(index=names, columns=tools)
+        t = t[t.notna().any(axis=1)]
         out = {}
-        for t in tools:
-            x = sub[sub.tool == t]
-            total = phase_time(x).to_numpy()
-            logs = np.log(total)
+        for tool in tools:
+            v = t[tool]
+            logs = np.log(v.fillna(TIME_LIMIT_MS).to_numpy() + SGM_SHIFT_MS)
             boots = rng.choice(logs, size=(N_BOOT, len(logs)), replace=True).mean(axis=1)
-            shares = (x[PHASES].clip(lower=0).to_numpy() / total[:, None]).mean(axis=0)
-            out[t] = (float(np.exp(logs.mean())), float(np.exp(np.percentile(boots, 2.5))),
-                      float(np.exp(np.percentile(boots, 97.5))), shares / shares.sum(), len(x))
+            # exact split of log((SGM + s) / s) = mean_i log(1 + t_i / s)
+            solved = v.dropna()
+            ph = (x[x.tool == tool].set_index("pattern_name").reindex(solved.index)
+                  .reindex(columns=PHASES).fillna(0).clip(lower=0))
+            tot = ph.sum(axis=1)
+            frac = ph.div(tot.where(tot > 0), axis=0).fillna(0)
+            frac.loc[tot <= 0, "filter"] = 1.0
+            w = np.log1p(solved / SGM_SHIFT_MS)
+            shares = np.append(frac.mul(w, axis=0).sum().to_numpy(),
+                               v.isna().sum() * np.log1p(TIME_LIMIT_MS / SGM_SHIFT_MS))
+            shares = shares / shares.sum() if shares.sum() > 0 else np.eye(len(SEGMENTS))[SEGMENTS.index("filter")]
+            out[tool] = (float(np.exp(logs.mean()) - SGM_SHIFT_MS), float(np.exp(np.percentile(boots, 2.5)) - SGM_SHIFT_MS),
+                         float(np.exp(np.percentile(boots, 97.5)) - SGM_SHIFT_MS), shares, len(t))
         return out
 
-    def instance_counts(d, ds, total):
+    def instance_counts(d, ds, total, tools):
         x = d[d.dataset == ds].assign(t=lambda f: phase_time(f))
         t = x.pivot_table(index="pattern_name", columns="tool", values="t", aggfunc="first").reindex(columns=tools)
         best = t.min(axis=1)
@@ -1169,18 +1358,12 @@ def fig_e2e_phases(enum=False):
         assert done.max() <= total
         return {tool: (int(done[tool]), int(fastest[tool])) for tool in tools}
 
-    def leaders(values):
-        best = max(values.values())
-        return {t for t, v in values.items() if v == best}
-
-    def panel(ax, summ, counts, title):
-        most_done = leaders({t: c[0] for t, c in counts.items()})
-        most_fastest = leaders({t: c[1] for t, c in counts.items()})
+    def panel(ax, summ, title, order):
         ymin = 10 ** np.floor(np.log10(min(v[0] for v in summ.values()) / 2))
-        for i, t in enumerate(ORDER):
+        for i, t in enumerate(order):
             g, lo, hi, shares, _ = summ[t]
             span, bottom, cum = np.log(g / ymin), ymin, 0.0
-            for p, s in zip(PHASES, shares):
+            for p, s in zip(SEGMENTS, shares):
                 cum += s
                 top = ymin * np.exp(span * cum)
                 ax.bar(i, top - bottom, 0.8, bottom=bottom, color=PHASE_COLOR[p], edgecolor="black",
@@ -1191,58 +1374,55 @@ def fig_e2e_phases(enum=False):
             ax.bar(i, g - ymin, 0.8, bottom=ymin, fill=False, edgecolor="black", linewidth=1.5)
             ax.errorbar(i, g, yerr=[[g - lo], [hi - g]], ecolor="black", elinewidth=1.5, capsize=3,
                         capthick=1.5, fmt="none")
-            lead = t in most_fastest
-            a = ax.annotate(str(counts[t][1]), xy=(i, 1), xycoords=("data", "axes fraction"),
-                            xytext=(0, COUNT_ROW_PT + (i % 2) * stagger), textcoords="offset points", ha="center",
-                            va="center", fontsize=fs(COUNT_SIZE), fontweight="bold" if lead else "normal", annotation_clip=False)
-            if lead:
-                underlined.append(a)
         ax.set_yscale("log")
         top = max(v[2] for v in summ.values())
         ax.set_ylim(bottom=ymin, top=top * (top / ymin) ** 0.06)
         ax.yaxis.set_major_locator(mticker.LogLocator(base=10))
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(ms_tick))
         ax.yaxis.set_minor_formatter(mticker.NullFormatter())
-        ax.set_xticks(range(len(ORDER)))
-        ax.set_xticklabels([f"{SHORT.get(t, t)} ({counts[t][0]})" for t in ORDER], rotation=90,
+        ax.set_xticks(range(len(order)))
+        ax.set_xticklabels([SHORT.get(t, t) for t in order], rotation=90,
                            rotation_mode="anchor", ha="right", va="center")
         ax.tick_params(axis="x", length=0, pad=4)
         style_axis(ax)
-        ax.set_title(title, fontweight="bold", fontsize=fs(11), pad=TITLE_PAD_PT)
-        for t, label in zip(ORDER, ax.get_xticklabels()):
-            label.set_fontweight("bold" if t in most_done else "normal")
+        ax.set_title(title, fontweight="bold", fontsize=fs(11), pad=fs(5))
+        for label in ax.get_xticklabels():
+            label.set_fontsize(fs(XTICK_SIZE))
 
-    fig, lab, unl = bench_grid((13.5, 12.4 if enum else 11.8), top=0.86 if enum else 0.875, bottom=0.11, left=0.075,
-                               right=0.995, hspace=1.6 if enum else 1.42, wspace=0.32, block_gap=0.03)
+    # stack_rows sets the final height; this grid only places the panels side by side
+    fig, lab, unl = bench_grid((13.5, 11.8), top=0.875, bottom=0.11, left=0.075, right=0.995, hspace=1.42,
+                               wspace=0.32, block_gap=0.03)
     for bench, datasets, axes in [("imsm", PLOT_IMSM, lab), ("mccreesh", MCC, unl)]:
         d = load(bench)
-        keys = all_completed(d, tools)
+        order = bar_order(bench)
+        tools = order
+        keys = universe(bench)
         sel = csv("labelled_patterns.csv") if bench == "imsm" else csv("unlabelled_pairs.csv")
         totals = sel.groupby("dataset").size()
-        print(f"\n{BENCH[bench]}: geometric-mean time (ms) and shares ({'/'.join(PHASES)}) over instances all {len(tools)} completed")
+        print(f"\n{BENCH[bench]}: shifted geometric-mean time (ms, shift {SGM_SHIFT_MS / 1e3:.0f} s, unsolved at "
+              f"{TIME_LIMIT_MS / 1e3:.0f} s) and shares ({'/'.join(SEGMENTS)}) over instances some system solved")
         for ax, ds in zip(axes, datasets):
-            summ = summarise(d, keys, ds)
+            summ = summarise(d, keys, ds, tools)
             n = summ[tools[0]][4]
             print(f"  {ds:14s} n={n:3d}  " + "  ".join(f"{t} {summ[t][0]:.4g} [" + "/".join(f"{100 * s:.0f}" for s in summ[t][3]) + "]"
                                                    for t in tools))
-            counts = instance_counts(d, ds, int(totals[ds]))
+            counts = instance_counts(d, ds, int(totals[ds]), tools)
             print(f"  {'':14s} of {int(totals[ds])}: " + "  ".join(f"{SHORT.get(t, t)} done {c[0]} fastest {c[1]}" for t, c in counts.items()))
-            panel(ax, summ, counts, f"{LABEL[ds]} (n={n})")
+            panel(ax, summ, f"{LABEL[ds]} (n={n})", order)
 
     for row in (lab[:4], lab[4:], unl):
         equal_gaps(fig, row, left=0.035, right=0.995, gap=0.016)
+    # a wide figure: fixed-height panels stacked under the legend, the height following from the text
+    height = stack_rows(fig, [lab[:4], lab[4:], unl], PANEL_IN, gap_in=0.12, heading_in=[HEADING_IN, 0.0, HEADING_IN],
+                        top_in=LEGEND_IN)
     block_heading(fig, lab, "Labelled")
     block_heading(fig, unl, "Unlabelled")
-    shared_ylabel(fig, lab + unl, "Time (ms)")
+    shared_ylabel(fig, lab + unl, f"Shifted geo. mean time (ms, shift {SGM_SHIFT_MS / 1e3:.0f} s)")
     handles = [plt.Rectangle((0, 0), 1, 1, facecolor=PHASE_COLOR[p], edgecolor="black", linewidth=1.5,
-                             hatch=PHASE_HATCH[p], label=PHASE_LABEL[p]) for p in PHASES]
-    legend_row(fig, "Phase:", handles, 0.982, columnspacing=1.4, handletextpad=0.5, handlelength=2.0)
-    fig.canvas.draw()
-    r = fig.canvas.get_renderer()
-    inv = fig.transFigure.inverted()
-    for a in underlined:
-        (x0, y0), (x1, _) = inv.transform(a.get_window_extent(r))
-        fig.add_artist(plt.Line2D([x0, x1], [y0 - 0.001] * 2, transform=fig.transFigure, color="black", linewidth=1.2))
+                             hatch=PHASE_HATCH[p], label=PHASE_LABEL[p]) for p in SEGMENTS]
+    legend_row(fig, "Phase:", handles, 1 - LEGEND_IN / 2 / height, columnspacing=1.4, handletextpad=0.5, handlelength=2.0)
+    print(f"figure {fig.get_size_inches()[0]:.1f} x {height:.1f} in drawn; at \\textwidth "
+          f"{TEXT_IN:.2f} x {height * TEXT_IN / fig.get_size_inches()[0]:.2f} in")
     save(fig, "e2e_phases_enum" if enum else "e2e_phases")
 
 
@@ -1270,7 +1450,7 @@ def glasgow_section():
     g_done = g.g_done.reindex(od.index).fillna(False).astype(bool)
     print(f"completed: IterOrbit {int(o_done.sum())}, Glasgow {int(g_done.sum())}; "
           f"only IterOrbit {int((o_done & ~g_done).sum())}, only Glasgow {int((~o_done & g_done).sum())}")
-    j = pd.concat([g, (ox["filter"] + ox["order"] + ox["enumerate"]).rename("o_ms"),
+    j = pd.concat([g, (ox["filter"] + ox["order"] + ox["symmetry"] + ox["enumerate"]).rename("o_ms"),
                    od.wall_ms.where(o_done).rename("o_wall")], axis=1).dropna(subset=["g_ms", "o_ms"])
     r = j.g_ms.clip(lower=FLOOR) / j.o_ms.clip(lower=FLOOR)
     print(f"both completed {len(j)}; excl. loading (floor {FLOOR} ms): {gm(r):.2f}x, "
@@ -1416,16 +1596,30 @@ orbit_section();
 # %% [markdown]
 # ### Figure `sota_filter.pdf`
 # Filtering (+ index) time vs candidates per pattern vertex: IterOrbit's filter in its end-to-end configuration
-# against OrbitSI's and the four baselines'; markers are the geometric-mean time and mean candidates, lines their
-# 95% confidence intervals.
+# against OrbitSI's and the baselines' (GraphQL from its filter-only runs, once complete); markers are the
+# geometric-mean time and mean candidates, lines their 95% confidence intervals.
 
 # %%
 def fig_sota_filter():
     import math
     setup(13.5, TEXT_IN)
-    CI_ALPHA, CI_WIDTH, CI_CAP = 0.7, 1.3, 3
+    CI_ALPHA, CI_WIDTH, CI_CAP = 0.8, 1.4, 3
+    # hollow markers need the darker palette: the cactus plots' colours
+    COLOR = CACTUS_COLOR
+    EDGE = 2.2
     Z = 1.96
     ORDER = plot_tool_order()
+    gqf = {b: graphql_filter(b) for b in ("imsm", "mccreesh")}
+    if any(g is not None for g in gqf.values()):
+        ORDER = ORDER[:-2] + [GRAPHQL] + ORDER[-2:]
+
+    def graphql(bench):
+        g = gqf[bench]
+        if g is None:
+            return pd.DataFrame()
+        g = g[g.status == "COMPLETED"]
+        return pd.DataFrame({"dataset": g.dataset, "pattern_name": g.pattern_name, "method": GRAPHQL,
+                             "cost_ms": g.cost_ms, "cand": g.cand})
 
     def orbitsi(bench):
         o = orbitsi_filter(bench)
@@ -1447,7 +1641,7 @@ def fig_sota_filter():
         s = pd.DataFrame({"dataset": s.dataset, "pattern_name": s.pattern_name,
                           "method": s.tool.map({"rapidmatch": "RM", "calig": "CaLiG", "veq": "VEQ", "dpiso": "DP-iso"}),
                           "cost_ms": s.filter_vertices_time_s * 1000.0, "cand": s.num_candidates_avg})
-        return pd.concat([ox, orbitsi("imsm"), s], ignore_index=True), PLOT_IMSM
+        return pd.concat([ox, orbitsi("imsm"), s, graphql("imsm")], ignore_index=True), PLOT_IMSM
 
     def unlabelled():
         f = csv("unlabelled_filter_fixpoint.csv")
@@ -1459,7 +1653,7 @@ def fig_sota_filter():
         s = s[s.status == "COMPLETED"]
         s = pd.DataFrame({"dataset": s.dataset, "pattern_name": s.pattern_name, "method": s.tool,
                           "cost_ms": s.filter_ms, "cand": s.avg_candidates})
-        return pd.concat([ox, orbitsi("mccreesh"), s], ignore_index=True), MCC
+        return pd.concat([ox, orbitsi("mccreesh"), s, graphql("mccreesh")], ignore_index=True), MCC
 
     def restrict(d):
         d = d.dropna(subset=["cost_ms", "cand"])
@@ -1512,22 +1706,27 @@ def fig_sota_filter():
             ax.set_ylim(0, y1)
             ax.yaxis.set_major_formatter(mticker.FuncFormatter(yfmt))
             for t, r in m.iterrows():
-                col = TOOL_COLOR[t]
+                col = COLOR[t]
                 ax.errorbar(r.cost, r.cand, xerr=[[r.cost - r.c1], [r.c3 - r.cost]], yerr=[[r.cand - r.k1], [r.k3 - r.cand]],
                             fmt="none", ecolor=col, elinewidth=CI_WIDTH, capsize=CI_CAP, capthick=CI_WIDTH, alpha=CI_ALPHA, zorder=2)
                 ax.plot(r.cost, r.cand, marker=TOOL_MARKER[t], markersize=10, markerfacecolor="none",
-                        markeredgecolor=col, markeredgewidth=1.8, linestyle="none", zorder=4 if t == "IterOrbit" else 3)
+                        markeredgecolor=col, markeredgewidth=EDGE, linestyle="none", zorder=4 if t == "IterOrbit" else 3)
             style_axis(ax, f"{LABEL[ds]} (n={n})")
 
     for row in (lab[:4], lab[4:], unl):
         equal_gaps(fig, row, left=0.045, right=0.995, gap=0.022)
+    # Rows stacked in inches (2026-10-27, user's request: a shorter figure): 1.4 in panels, rows only as far
+    # apart as their titles and tick labels need, with room for the block headings, the legend above and the
+    # shared x label below.
+    height = stack_rows(fig, [lab[:4], lab[4:], unl], panel_in=1.4, gap_in=0.12, heading_in=[0.42, 0.0, 0.5],
+                        top_in=0.42, bottom_in=0.48)
     block_heading(fig, lab, "Labelled")
     block_heading(fig, unl, "Unlabelled")
     shared_ylabel(fig, lab + unl, "Candidates / vertex")
     shared_xlabel(fig, lab + unl, "Filtering + Index Time (ms, log scale)" if INCLUDE_INDEX else "Filtering Time (ms, log scale)")
     handles = [plt.Line2D([0], [0], marker=TOOL_MARKER[t], linestyle="none", markersize=9, markerfacecolor="none",
-                          markeredgecolor=TOOL_COLOR[t], markeredgewidth=1.8, label=SHORT.get(t, t)) for t in ORDER]
-    legend_row(fig, "Filter:", handles, 0.975, columnspacing=1.2, handletextpad=0.3)
+                          markeredgecolor=COLOR[t], markeredgewidth=EDGE, label=SHORT.get(t, t)) for t in ORDER]
+    legend_row(fig, "Filter:", handles, 1 - 0.2 / height, columnspacing=1.2, handletextpad=0.3)
     save(fig, "sota_filter")
 
 
@@ -1692,23 +1891,31 @@ def fig_enum_cactus():
     GUP = "GuP"
     X = {"imsm": (800, 200), "mccreesh": (480, 100)}
     e = csv("enum_e2e.csv")
+    gq = [graphql_phases(b, "enum") for b in ("imsm", "mccreesh")]
+    if all(g is not None for g in gq):
+        e = pd.concat([e] + [g.assign(bench=b, status="COMPLETED") for g, b in zip(gq, ("imsm", "mccreesh"))],
+                      ignore_index=True)
 
     def legend_order():
         order = plot_tool_order()
         x = e[(e.status == "COMPLETED")].copy()
-        x = pd.concat([with_index(x[x.bench == b], b) for b in ("imsm", "mccreesh")])
+        x = pd.concat([with_index(x[x.bench == b], b, charge=E2E_INDEX_CHARGE) for b in ("imsm", "mccreesh")])
         x["t"] = phase_time(x)
         t = x.pivot_table(index=["bench", "dataset", "pattern_name"], columns="tool", values="t", aggfunc="first")[order + [GUP]].dropna()
         g = {c: gmean(t[c]) for c in t.columns}
-        i = next((k for k, c in enumerate(order) if g[c] < g[GUP]), len(order))
+        i = min(next((k for k, c in enumerate(order) if g[c] < g[GUP]), len(order)), len(order) - 2)
         print(f"legend: GuP placed by {len(t)} instances all seven completed: " + ", ".join(f"{c} {g[c]:.3g}" for c in t.columns))
-        return order[:i] + [GUP] + order[i:]
+        order = order[:i] + [GUP] + order[i:]
+        if GRAPHQL in set(x.tool):
+            order = place_by_gmean(order, GRAPHQL, x.pivot_table(index=["bench", "dataset", "pattern_name"], columns="tool",
+                                                                  values="t", aggfunc="first"))
+        return order
 
     order = legend_order()
     fig, axes = plt.subplots(2, 1, figsize=(7.4, 6.2))
     for ax, (bench, datasets) in zip(axes, [("imsm", PLOT_IMSM), ("mccreesh", MCC)]):
         d = e[(e.bench == bench) & (e.status == "COMPLETED") & e.dataset.isin(datasets)].copy()
-        d = with_index(d, bench)
+        d = with_index(d, bench, charge=E2E_INDEX_CHARGE)
         done = {}
         for t in order:
             y = np.sort(phase_time(d[d.tool == t]).to_numpy())

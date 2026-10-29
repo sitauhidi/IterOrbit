@@ -6,3 +6,4 @@ analysis/figures/
 analysis/data/
 analysis/.ipynb_checkpoints/
 __pycache__/
+analysis/build_data.py
