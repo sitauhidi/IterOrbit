@@ -49,18 +49,21 @@ void print_usage() {
               << "                           with --count-only)\n"
               << "  --order <u,u,...>        Search in this matching order (pattern vertex IDs, a\n"
               << "                           permutation) instead of OrderEngine's (diagnostic)\n"
-              << "  --order-mode <m>         Matching order: core (default; 2-core first, fewest\n"
-              << "                           candidates), orbit (by orbit strength), core-orbit (core,\n"
-              << "                           dense-orbit score before candidates) -- see OrderEngine.h\n"
+              << "  --order-mode <m>         Matching order: core-orbit (default; 2-core first, then the\n"
+              << "                           dense-orbit score before candidates), core (2-core first,\n"
+              << "                           fewest candidates), orbit (by orbit strength) -- see\n"
+              << "                           OrderEngine.h\n"
               << "  --search-stats           Print per-depth search-tree node and local-candidate counts\n"
               << "  --no-edge-orbit-filter   Keep candidate-space index entries whose data edge lies in\n"
               << "                           fewer triangles than the pattern edge (ablation)\n"
               << "  --no-symmetry            With --count-only: count every embedding instead of one per\n"
               << "                           class of pattern automorphisms (ablation)\n"
-              << "  --no-edge-thinning       Count orbits on the whole candidate subgraph, not only on the\n"
-              << "                           edges some pattern edge can map to (ablation)\n"
-              << "  --no-label-index         Don't build the data graph's neighbour-label index at load;\n"
-              << "                           LDF/NLF then count labels from the adjacency (ablation)\n";
+              << "  --edge-thinning          Count orbits only on the edges of the candidate subgraph that\n"
+              << "                           some pattern edge can map to (off by default;\n"
+              << "                           --no-edge-thinning, the default, counts on all its edges)\n"
+              << "  --label-index            Build the data graph's neighbour-label index at load for\n"
+              << "                           LDF/NLF (off by default: they count labels from the\n"
+              << "                           adjacency; --no-label-index keeps it off)\n";
 }
 
 void print_ms(const char* label, double ms) {
@@ -98,10 +101,10 @@ int main(int argc, char* argv[]) {
     bool search_stats = false;
     bool edge_orbit_filter = true;
     bool symmetry_breaking = true;
-    bool edge_thinning = true;
-    bool label_index = true;
+    bool edge_thinning = false;
+    bool label_index = false;
     std::string order_arg;
-    OrderMode order_mode = OrderMode::Core;
+    OrderMode order_mode = OrderMode::CoreOrbit;
 
     bool iterate_specified = false;
 
@@ -173,8 +176,12 @@ int main(int argc, char* argv[]) {
             edge_orbit_filter = false;
         } else if (args[i] == "--no-symmetry") {
             symmetry_breaking = false;
+        } else if (args[i] == "--edge-thinning") {
+            edge_thinning = true;
         } else if (args[i] == "--no-edge-thinning") {
             edge_thinning = false;
+        } else if (args[i] == "--label-index") {
+            label_index = true;
         } else if (args[i] == "--no-label-index") {
             label_index = false;
         } else if (args[i] == "--search-stats") {

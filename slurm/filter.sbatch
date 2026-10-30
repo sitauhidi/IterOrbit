@@ -27,7 +27,7 @@ WORKSPACE=/mnt/scratch2/users/40334799/oex
 RESULTS=${WORKSPACE}/results/paper
 TIMEOUT_S=1800
 export OMP_NUM_THREADS=1
-IO_FILTER="--filter-only --no-edge-thinning --no-label-index"
+IO_FILTER="--filter-only"
 # ------------------------------------------------------------------------------------------------------
 BENCH=$1
 IO_BIN=${WORKSPACE}/IterOrbit/build/iterorbit     # compiled by build.sbatch
@@ -84,7 +84,7 @@ run() {   # run <configuration> <IterOrbit flags ...>: one filtering run, logged
 }
 
 for g in 3 4 5; do
-    run gs${g}_singlepass --graphlet-size ${g} --iterate 1
+    run gs${g}_singlepass --graphlet-size ${g}
     run gs${g}_fixpoint --graphlet-size ${g} --iterate 0
 done
 run gs${G_E2E}_fixpoint_no_orbit --graphlet-size ${G_E2E} --iterate 0 --no-orbit-filter

@@ -30,9 +30,9 @@ WORKSPACE=/mnt/scratch2/users/40334799/oex
 RESULTS=${WORKSPACE}/results/paper
 TIMEOUT_S=1800
 export OMP_NUM_THREADS=1
-IO_IMSM="--graphlet-size 4 --iterate 3"
+IO_IMSM="--iterate 3"
 IO_MCC="--graphlet-size 5 --iterate 0"
-IO_COUNT="--count-only --order-mode core-orbit --no-edge-thinning --no-label-index"
+IO_COUNT="--count-only"
 
 BENCH=$1
 VARIANT=${2:-default}

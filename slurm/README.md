@@ -1,6 +1,6 @@
 # Running the experiments
 
-Four SLURM scripts run IterOrbit's experiments in the paper. Each script is standalone: its settings (paths, the time limit and IterOrbit's flags) are at its top, and it takes no environment variables. Each run writes one log per instance. `analysis/build_data.py` turns the logs into the CSVs that `analysis/analysis.py` reads.
+Four SLURM scripts run IterOrbit's experiments in the paper. Each script is standalone: its settings (paths, the time limit and IterOrbit's flags) are at its top, and it takes no environment variables. Each run writes one log per instance.
 
 | Script | What it runs |
 |---|---|
@@ -52,4 +52,4 @@ Each log records the command. It ends with `STATUS` (`COMPLETED`, `TIMEOUT` or `
 
 - **Resources:** one NUMA domain per task (16 cores, 120 GB). `OMP_NUM_THREADS=1` caps IterOrbit's only OpenMP section, in g=5 orbit counting.
 - **Time limit:** 30 minutes per run.
-- **IterOrbit's configuration:** labelled g=4 and I_max=3; unlabelled g=5 to the fixpoint. Every run induces the candidate subgraph after every stage, as in Algorithm 1, without the label index or edge thinning (`--no-label-index --no-edge-thinning`); counting and enumeration order with `--order-mode core-orbit`. The thinning and label-index flags are passed explicitly; double induction is the binary's default, so no flag requests it.
+- **IterOrbit's configuration:** labelled g=4 and I_max=3; unlabelled g=5 to the fixpoint. The scripts pass only the flags that differ from the binary's defaults. So every run induces the candidate subgraph after every stage, as in Algorithm 1, counts orbits on the whole candidate subgraph (no edge thinning), builds no label index, and orders with `core-orbit`.

@@ -15,11 +15,11 @@ enum class OrderMode {
     /// counts); then repeatedly take the vertex with the most backward neighbours, ties by
     /// orbit strength.
     Orbit,
-    /// The default: the pattern's 2-core before its trees. Start at the core vertex with the
+    /// The pattern's 2-core before its trees. Start at the core vertex with the
     /// fewest candidates per neighbour; then most backward neighbours, ties by fewest
     /// candidates.
     Core,
-    /// As Core, but the dense-orbit score (triangle, 4-cycle, paw-triangle, diamond and
+    /// The default. As Core, but the dense-orbit score (triangle, 4-cycle, paw-triangle, diamond and
     /// 4-clique orbit counts) is compared before the candidate count, and the start is the
     /// vertex with the highest such score.
     CoreOrbit
@@ -33,7 +33,7 @@ public:
     /// @param candidates  the filtered candidate sets; needed by Core and CoreOrbit
     /// @param mode        the ordering rule
     OrderEngine(const AppGraph& pattern, const OrbitCounts& orbits,
-                const CandidateSets* candidates = nullptr, OrderMode mode = OrderMode::Core);
+                const CandidateSets* candidates = nullptr, OrderMode mode = OrderMode::CoreOrbit);
 
     /// Computes the order and the pivots.
     void run();

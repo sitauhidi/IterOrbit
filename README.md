@@ -77,6 +77,8 @@ Filtering:
 | `--no-arc-consistency` | Run the semi-join once per round instead of to a fixpoint. |
 | `--disable-semi-join` | Skip the semi-join stage. |
 | `--no-orbit-filter` | Skip the orbit stage in every round; the data graph is still contracted. |
+| `--edge-thinning` | Count orbits only on the edges of the candidate subgraph that some pattern edge can map to (off by default; `--no-edge-thinning` is accepted and keeps it off). |
+| `--label-index` | Build the data graph's neighbour-label index at load, for LDF and NLF (off by default: they count labels from the adjacency; `--no-label-index` is accepted and keeps it off). |
 | `--single-induction` | Induce the data graph once per round (before the orbit stage) instead of twice (also after it). |
 | `--orbit-throttle`, `--orbit-throttle-threshold <f>` | Skip the orbit stage in rounds where the candidate sets have barely shrunk since it last ran (off by default). |
 
@@ -88,20 +90,25 @@ Ordering and search:
 | `--count-only` | Count the embeddings without storing them. Cannot be combined with `--verbose`. |
 | `--max-embeddings <N>` | Enumerate the embeddings one by one and stop after `N` of them (no symmetry breaking or last-level counting). Cannot be combined with `--count-only`. |
 | `--cbj` | Conflict-directed backjumping. |
-| `--order-mode <core\|orbit\|core-orbit>` | Matching order (default `core`); see `include/OrderEngine.h`. |
+| `--order-mode <core-orbit\|core\|orbit>` | Matching order (default `core-orbit`); see `include/OrderEngine.h`. |
 | `--order <u,u,...>` | Use this matching order (a permutation of the pattern's vertex IDs). |
 | `--no-edge-orbit-filter` | Do not prune the candidate-space index by per-edge triangle counts. |
 | `--no-symmetry` | With `--count-only`: count every embedding one by one instead of one per class of pattern automorphisms. |
 | `--search-stats` | Print the matching order and per-depth search-tree statistics. |
 | `--verbose` | Print every embedding and per-stage filtering statistics. |
 
-The options that switch a component off exist for ablation; none of them changes the result.
+The defaults are the configuration the paper describes: the data graph induced twice per round, orbits
+counted on the whole candidate subgraph (no edge thinning), no label index, and the `core-orbit` order.
+The options that switch a component off exist for ablation; `--edge-thinning` and `--label-index` switch
+on optional speed-ups. None of them changes the result.
 
 ### Output
 
 The run prints its configuration, then one line per phase and the result:
 
 ```
+Edge thinning: off; label index: off
+...
 Total loading time: ... ms.
 Total filtering time: ... ms.
 Total ordering time: ... us.
@@ -162,11 +169,10 @@ originals on subgraphs of a given graph; its header comment gives the build line
 
 `analysis/` holds every number, table and figure of the paper, and the exploratory analyses behind it:
 
-- `analysis/data/`: the experiments' results as CSV files (`MANIFEST.csv` lists each file and its source).
-- `analysis/analysis.ipynb`: the notebook that computes everything from those CSVs, one section per figure,
-  table or subsection, with its outputs. `analysis/analysis.py` is the same code as a script; the notebook is
-  generated from it.
-- `analysis/build_data.py`: rebuilds `analysis/data/` from the experiments' logs (not part of this repository).
+- `analysis/analysis.ipynb`: the notebook that computes everything from the experiments' results, one section
+  per figure, table or subsection, with its outputs. `analysis/analysis.py` is the same code as a script; the
+  notebook is generated from it. Both read the results as CSV files from `analysis/data/`, which is not part of
+  this repository.
 - `slurm/`: the SLURM scripts that run IterOrbit's experiments and write those logs (see `slurm/README.md`).
 - `baseline/`: the patches the paper's comparison applied to the baselines' upstream sources (`subgraphmatching-mccreesh` and `-filteronly` for SubgraphMatchingSurvey `eb3ab43`, whose own candidate printing is left as upstream has it; `gup-timed` for GuP `fbaf103`), each applied with `patch -p1` to a copy of the checkout.
 
