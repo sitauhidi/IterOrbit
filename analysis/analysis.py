@@ -3,6 +3,7 @@
 #
 # Every number, table and figure of the paper, and the exploratory analyses behind it, from the CSVs in
 # `analysis/data/` (built once from the experiments' logs by `analysis/build_data.py`; this script reads no log).
+# Neither the CSVs nor `build_data.py` are in the repository; both are available from the authors on request.
 #
 # Run it as a script (`python analysis/analysis.py`) or open it as a notebook: the `# %%` lines are cells
 # (VS Code and Jupyter with Jupytext read them; `jupytext --to notebook analysis/analysis.py` writes an
@@ -49,7 +50,7 @@ def _find_root():
     for p in [here, *here.parents]:
         if (p / "analysis" / "data" / "MANIFEST.csv").exists():
             return p
-    raise FileNotFoundError("analysis/data not found: run analysis/build_data.py first")
+    raise FileNotFoundError("analysis/data not found (the CSVs are available from the authors on request)")
 
 
 ROOT = _find_root()
@@ -984,7 +985,7 @@ fig_refutation()
 
 
 # %% [markdown]
-# ## End-to-end performance (Table `tab:e2e`)
+# ## Counting end to end (Table `tab:count`)
 # All eight labelled graphs and the five unlabelled families: IterOrbit, IterOrbit without its search
 # accelerations, the OrbitSI package's published configuration, RM, DP-iso, VEQ and CaLiG.
 
@@ -1063,7 +1064,7 @@ def e2e_section():
 e2e_section();
 
 # %% [markdown]
-# ### Sensitivity to the index charge (Table `tab:index-amortised`)
+# ### Sensitivity to the index charge, counting (Section `subsec:counting`)
 # IterOrbit's speed-up and fastest counts with each system's index build charged in full (as in the paper),
 # shared by a data graph's 100 patterns, and fully amortised.
 
@@ -1734,7 +1735,7 @@ fig_sota_filter()
 
 
 # %% [markdown]
-# ## Enumeration (first $10^5$ embeddings, one at a time)
+# ## Enumeration (first $10^5$ embeddings, one at a time; Table `tab:enum`)
 # Every system visits the embeddings one at a time up to $10^5$ (Sun and Luo's protocol), without symmetry
 # breaking or last-level counting; GuP joins as a seventh system (unlabelled patterns of at most 256 vertices).
 
@@ -1782,7 +1783,7 @@ def enum_section():
         t = x.pivot_table(index=["dataset", "pattern_name"], columns="tool", values="t", aggfunc="first").reindex(columns=SEVEN)
         _, tc = e2e_times(bench, datasets)
         tc = tc.reindex(columns=SEVEN)
-        print(f"\n==== {BENCH[bench]}: enumeration (10^5) vs counting (tab:e2e)")
+        print(f"\n==== {BENCH[bench]}: enumeration (10^5, tab:enum) vs counting (tab:count)")
         keys = t.index.union(tc.index)
         t, tc = t.reindex(keys), tc.reindex(keys)
         fe = t.eq(t.min(axis=1), axis=0).sum()
@@ -1815,9 +1816,10 @@ def enum_section():
 enum_section()
 
 # %% [markdown]
-# ### By pattern size and density (Table `tab:size-density` from the counting runs)
-# Per bin: instances any system completed, how many each system completed and won (fastest of six), and
-# IterOrbit's speed-up over each system. Dense = average degree >= 3 (Sun and Luo's split; the labelled corpus's
+# ### By pattern size and density (Table `tab:size-density`, from the enumeration runs)
+# Per bin: instances any system completed, how many each system completed and won, and IterOrbit's speed-up
+# over each system. Enumeration compares eight systems (the six, GuP and GraphQL; indexes charged per query, as in
+# the table); counting, printed first, the six. Dense = average degree >= 3 (Sun and Luo's split; the labelled corpus's
 # own names are kept, which call every 4-vertex pattern dense).
 
 # %%
@@ -1843,20 +1845,24 @@ def size_density(mode="count"):
         for name, keys in groups:
             tt, ff = t.loc[keys], fast.loc[keys]
             line = f"  {name:12s} n={len(tt):3d}  "
-            line += "  ".join(f"{SHORT.get(s, s)} {int(tt[s].notna().sum()):3d}/{int(ff[s].sum()):3d}" for s in SIX)
+            line += "  ".join(f"{SHORT.get(s, s)} {int(tt[s].notna().sum()):3d}/{int(ff[s].sum()):3d}" for s in systems)
             line += "  | IO speed-up " + "  ".join(
-                f"{SHORT.get(s, s)} {g:5.2f}x({n})" for s in SIX[1:] for g, n in [speedup(tt, s)])
+                f"{SHORT.get(s, s)} {g:5.2f}x({n})" for s in systems[1:] for g, n in [speedup(tt, s)])
             print(line)
 
+    systems = SIX if mode == "count" else SEVEN + [GRAPHQL]
     for bench, datasets in (("imsm", IMSM_ALL), ("mccreesh", MCC)):
         if mode == "count":
             _, t = e2e_times(bench, datasets)
-            t = t.reindex(columns=SIX).dropna(how="all")
+            t = t.reindex(columns=systems).dropna(how="all")
         else:
             x = e[(e.bench == bench) & (e.status == "COMPLETED") & e.dataset.isin(datasets)].copy()
-            x = with_index(x, bench)
+            gq = graphql_phases(bench, "enum")
+            if gq is not None:
+                x = pd.concat([x, gq[gq.dataset.isin(datasets)].assign(bench=bench, status="COMPLETED")], ignore_index=True)
+            x = with_index(x, bench, charge=E2E_INDEX_CHARGE)
             x["t"] = phase_time(x)
-            t = x.pivot_table(index=["dataset", "pattern_name"], columns="tool", values="t", aggfunc="first").reindex(columns=SIX)
+            t = x.pivot_table(index=["dataset", "pattern_name"], columns="tool", values="t", aggfunc="first").reindex(columns=systems)
         meta = inst[inst.bench == bench].set_index(["dataset", "pattern_name"]).reindex(t.index)
         assert meta.nv.notna().all()
         size = pd.cut(meta.nv, SIZE_BINS[bench])
